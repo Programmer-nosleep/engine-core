@@ -1,0 +1,6 @@
+#include "resource.h"
+
+IDR_SHADER_SKY_VERT RCDATA "shaders/sky.vert.glsl"
+IDR_SHADER_SKY_FRAG RCDATA "shaders/sky.frag.glsl"
+IDR_SHADER_POST_VERT RCDATA "shaders/post.vert.glsl"
+IDR_SHADER_POST_FRAG RCDATA "shaders/post.frag.glsl"

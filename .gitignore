@@ -1,0 +1,7 @@
+build*/
+.cache/
+*.exe
+*.o
+*.pdb
+*.ilk
+compile_commands.json

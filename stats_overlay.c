@@ -1,0 +1,612 @@
+#include "stats_overlay.h"
+
+#include "block_world.h"
+#include "diagnostics.h"
+#include "player_controller.h"
+
+#include <math.h>
+#include <stdio.h>
+#include <string.h>
+
+static void stats_overlay_show_error(const char* title, const char* message);
+static int stats_overlay_build_font(GLuint* out_font_base, int font_height);
+static void stats_overlay_draw_rect(float left, float top, float right, float bottom, float r, float g, float b, float a);
+static void stats_overlay_draw_outline(float left, float top, float right, float bottom, float r, float g, float b, float a);
+static float stats_overlay_get_font_glyph_width(const StatsOverlay* overlay, GLuint font_base);
+static void stats_overlay_draw_text(GLuint font_base, float x, float y, float r, float g, float b, float a, const char* text);
+static void stats_overlay_draw_text_right(
+  const StatsOverlay* overlay,
+  GLuint font_base,
+  float right,
+  float y,
+  float r,
+  float g,
+  float b,
+  float a,
+  const char* text
+);
+static void stats_overlay_draw_text_shadow(
+  const StatsOverlay* overlay,
+  GLuint font_base,
+  float x,
+  float y,
+  float r,
+  float g,
+  float b,
+  float a,
+  const char* text
+);
+static void stats_overlay_push_frame_sample(StatsOverlay* overlay, float frame_time_ms);
+static void stats_overlay_get_frame_extents(const StatsOverlay* overlay, float* out_min_ms, float* out_max_ms);
+static void stats_overlay_draw_frame_graph(
+  const StatsOverlay* overlay,
+  float left,
+  float top,
+  float right,
+  float bottom,
+  float line_r,
+  float line_g,
+  float line_b
+);
+
+int stats_overlay_create(StatsOverlay* overlay)
+{
+  if (overlay == NULL)
+  {
+    return 0;
+  }
+
+  memset(overlay, 0, sizeof(*overlay));
+  if (!stats_overlay_build_font(&overlay->small_font_base, -12) ||
+    !stats_overlay_build_font(&overlay->large_font_base, -18) ||
+    !stats_overlay_build_font(&overlay->hero_font_base, -28))
+  {
+    stats_overlay_destroy(overlay);
+    return 0;
+  }
+
+  return 1;
+}
+
+void stats_overlay_destroy(StatsOverlay* overlay)
+{
+  if (overlay == NULL)
+  {
+    return;
+  }
+
+  if (overlay->small_font_base != 0U)
+  {
+    glDeleteLists(overlay->small_font_base, 96);
+    overlay->small_font_base = 0U;
+  }
+
+  if (overlay->large_font_base != 0U)
+  {
+    glDeleteLists(overlay->large_font_base, 96);
+    overlay->large_font_base = 0U;
+  }
+
+  if (overlay->hero_font_base != 0U)
+  {
+    glDeleteLists(overlay->hero_font_base, 96);
+    overlay->hero_font_base = 0U;
+  }
+
+  overlay->frame_time_history_write_index = 0;
+  overlay->frame_time_history_count = 0;
+  overlay->last_frame_sample_index = 0U;
+}
+
+void stats_overlay_render(StatsOverlay* overlay, int width, int height, const OverlayState* state)
+{
+  const OverlayState fallback_overlay = {
+    .settings = { 149.6f, 180.0f, 0.5f, 65.0f, 0.42f, 0.62f, 1.0f, -14.0f, 1.0f, 1.0f, 1.0f, 1 },
+    .metrics = { 149.6f, 90.0f, 90.0f, 60.0f, 16.6f, 0.0f, 0.0f, 0.0f, 1, 1, 0, 0, 0U },
+    .panel_width = OVERLAY_UI_DEFAULT_WIDTH,
+    .mouse_x = 0,
+    .mouse_y = 0,
+    .cursor_mode_enabled = 0,
+    .hot_slider = OVERLAY_SLIDER_NONE,
+    .active_slider = OVERLAY_SLIDER_NONE,
+    .hot_toggle = OVERLAY_TOGGLE_NONE,
+    .god_mode_enabled = 0,
+    .ui_time_seconds = 0.0f,
+    .scroll_offset = 0.0f,
+    .scroll_max = 0.0f
+  };
+  const OverlayState* active_overlay = (state != NULL) ? state : &fallback_overlay;
+  const float current_frame_ms = (active_overlay->metrics.frame_time_ms > 0.0f)
+    ? active_overlay->metrics.frame_time_ms
+    : ((active_overlay->metrics.frames_per_second > 0.01f) ? (1000.0f / active_overlay->metrics.frames_per_second) : 0.0f);
+  const float fps_value = (active_overlay->metrics.frames_per_second > 0.0f)
+    ? active_overlay->metrics.frames_per_second
+    : ((current_frame_ms > 0.01f) ? (1000.0f / current_frame_ms) : 0.0f);
+  const float cpu_usage = fminf(fmaxf(active_overlay->metrics.cpu_usage_percent, 0.0f), 100.0f);
+  const float gpu0_usage = fminf(fmaxf(active_overlay->metrics.gpu0_usage_percent, 0.0f), 100.0f);
+  const float gpu1_usage = fminf(fmaxf(active_overlay->metrics.gpu1_usage_percent, 0.0f), 100.0f);
+  const float hud_width = 308.0f;
+  const float hud_height = 284.0f;
+  const float hud_margin = 12.0f;
+  const float hud_left = (float)width - hud_width - hud_margin;
+  const float hud_top = 12.0f;
+  const float hud_right = hud_left + hud_width;
+  const float hud_bottom = hud_top + hud_height;
+  const float graph_left = hud_left + 14.0f;
+  const float graph_top = hud_top + 188.0f;
+  const float graph_right = hud_right - 14.0f;
+  const float graph_bottom = hud_top + 224.0f;
+  const float info_left = hud_left + 14.0f;
+  const float info_right = hud_left + 170.0f;
+  const char* mode_label = player_controller_get_mode_label((PlayerMode)active_overlay->metrics.player_mode);
+  const char* block_label = block_world_get_block_label((BlockType)active_overlay->metrics.selected_block_type);
+  float fps_r = 0.42f;
+  float fps_g = 0.96f;
+  float fps_b = 0.38f;
+  float frame_min_ms = current_frame_ms;
+  float frame_max_ms = current_frame_ms;
+  char line_buffer[96] = { 0 };
+  char value_buffer[64] = { 0 };
+
+  if (overlay == NULL ||
+    overlay->small_font_base == 0U ||
+    overlay->large_font_base == 0U ||
+    overlay->hero_font_base == 0U ||
+    width <= 0 ||
+    height <= 0)
+  {
+    return;
+  }
+
+  if (current_frame_ms > 0.01f &&
+    active_overlay->metrics.stats_sample_index != overlay->last_frame_sample_index)
+  {
+    stats_overlay_push_frame_sample(overlay, current_frame_ms);
+    overlay->last_frame_sample_index = active_overlay->metrics.stats_sample_index;
+  }
+  stats_overlay_get_frame_extents(overlay, &frame_min_ms, &frame_max_ms);
+  if (frame_min_ms <= 0.0f)
+  {
+    frame_min_ms = current_frame_ms;
+  }
+  if (frame_max_ms <= 0.0f)
+  {
+    frame_max_ms = current_frame_ms;
+  }
+
+  if (fps_value < 30.0f)
+  {
+    fps_r = 1.0f;
+    fps_g = 0.36f;
+    fps_b = 0.28f;
+  }
+  else if (fps_value < 55.0f)
+  {
+    fps_r = 0.98f;
+    fps_g = 0.78f;
+    fps_b = 0.24f;
+  }
+
+  glUseProgram(0);
+  glBindVertexArray(0);
+  glBindTexture(GL_TEXTURE_2D, 0);
+  glDisable(GL_DEPTH_TEST);
+  glDisable(GL_CULL_FACE);
+  glEnable(GL_BLEND);
+  glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+  glMatrixMode(GL_PROJECTION);
+  glPushMatrix();
+  glLoadIdentity();
+  glOrtho(0.0, (GLdouble)width, (GLdouble)height, 0.0, -1.0, 1.0);
+  glMatrixMode(GL_MODELVIEW);
+  glPushMatrix();
+  glLoadIdentity();
+
+  stats_overlay_draw_rect(hud_left, hud_top, hud_right, hud_bottom, 0.03f, 0.04f, 0.05f, 0.76f);
+  stats_overlay_draw_rect(hud_left, hud_top, hud_right, hud_top + 38.0f, 0.18f, 0.19f, 0.20f, 0.18f);
+  stats_overlay_draw_rect(hud_left, hud_top, hud_right, hud_top + 1.0f, 0.72f, 0.74f, 0.76f, 0.16f);
+  stats_overlay_draw_rect(hud_right - 1.0f, hud_top, hud_right, hud_bottom, 0.70f, 0.72f, 0.76f, 0.14f);
+  stats_overlay_draw_outline(hud_left + 0.5f, hud_top + 0.5f, hud_right - 0.5f, hud_bottom - 0.5f, 0.62f, 0.66f, 0.72f, 0.10f);
+
+  stats_overlay_draw_text_shadow(overlay, overlay->large_font_base, hud_left + 12.0f, hud_top + 28.0f, 0.18f, 0.90f, 0.54f, 1.0f, "ENGINE");
+  stats_overlay_draw_text_shadow(overlay, overlay->small_font_base, hud_right - 100.0f, hud_top + 26.0f, 0.94f, 0.95f, 0.97f, 0.96f, "REALTIME");
+
+  stats_overlay_draw_text_shadow(overlay, overlay->large_font_base, hud_left + 12.0f, hud_top + 56.0f, 0.18f, 0.90f, 0.48f, 1.0f, "GPU 0");
+  (void)snprintf(value_buffer, sizeof(value_buffer), "%.0f%%", gpu0_usage);
+  stats_overlay_draw_text_right(overlay, overlay->large_font_base, hud_right - 12.0f, hud_top + 54.0f, 0.97f, 0.98f, 0.99f, 1.0f, value_buffer);
+
+  stats_overlay_draw_text_shadow(overlay, overlay->large_font_base, hud_left + 12.0f, hud_top + 82.0f, 0.20f, 0.78f, 0.94f, 1.0f, "GPU 1");
+  (void)snprintf(value_buffer, sizeof(value_buffer), "%.0f%%", gpu1_usage);
+  stats_overlay_draw_text_right(overlay, overlay->large_font_base, hud_right - 12.0f, hud_top + 80.0f, 0.97f, 0.98f, 0.99f, 1.0f, value_buffer);
+
+  stats_overlay_draw_text_shadow(overlay, overlay->large_font_base, hud_left + 12.0f, hud_top + 108.0f, 0.36f, 0.58f, 0.98f, 1.0f, "CPU");
+  (void)snprintf(value_buffer, sizeof(value_buffer), "%.0f%%", cpu_usage);
+  stats_overlay_draw_text_right(overlay, overlay->large_font_base, hud_right - 12.0f, hud_top + 106.0f, 0.97f, 0.98f, 0.99f, 1.0f, value_buffer);
+
+  stats_overlay_draw_text_shadow(overlay, overlay->large_font_base, hud_left + 12.0f, hud_top + 136.0f, 0.96f, 0.36f, 0.32f, 1.0f, "OPENGL");
+  (void)snprintf(value_buffer, sizeof(value_buffer), "%.0f", fps_value);
+  stats_overlay_draw_text_right(overlay, overlay->hero_font_base, hud_right - 108.0f, hud_top + 134.0f, 0.97f, 0.98f, 0.99f, 1.0f, value_buffer);
+  stats_overlay_draw_text_shadow(overlay, overlay->small_font_base, hud_right - 96.0f, hud_top + 132.0f, fps_r, fps_g, fps_b, 1.0f, "FPS");
+
+  stats_overlay_draw_text_shadow(overlay, overlay->large_font_base, hud_left + 12.0f, hud_top + 164.0f, 0.96f, 0.44f, 0.48f, 1.0f, "Frametime");
+  (void)snprintf(value_buffer, sizeof(value_buffer), "%.1f", current_frame_ms);
+  stats_overlay_draw_text_right(overlay, overlay->large_font_base, hud_right - 38.0f, hud_top + 162.0f, 0.98f, 0.98f, 0.99f, 1.0f, value_buffer);
+  stats_overlay_draw_text_shadow(overlay, overlay->small_font_base, hud_right - 28.0f, hud_top + 160.0f, 0.92f, 0.94f, 0.98f, 0.98f, "MS");
+  (void)snprintf(line_buffer, sizeof(line_buffer), "min: %.1fms, max: %.1fms", frame_min_ms, frame_max_ms);
+  stats_overlay_draw_text_right(overlay, overlay->small_font_base, hud_right - 12.0f, hud_top + 178.0f, 0.90f, 0.92f, 0.95f, 0.90f, line_buffer);
+
+  stats_overlay_draw_frame_graph(overlay, graph_left, graph_top, graph_right, graph_bottom, fps_r, fps_g, fps_b);
+
+  stats_overlay_draw_rect(hud_left + 14.0f, hud_top + 234.0f, hud_right - 14.0f, hud_top + 235.0f, 0.18f, 0.22f, 0.25f, 0.84f);
+
+  (void)snprintf(line_buffer, sizeof(line_buffer), "RES %dx%d", width, height);
+  stats_overlay_draw_text(overlay->small_font_base, info_left, hud_top + 250.0f, 0.78f, 0.82f, 0.88f, 0.94f, line_buffer);
+  (void)snprintf(line_buffer, sizeof(line_buffer), "FOV %.0f", active_overlay->settings.camera_fov_degrees);
+  stats_overlay_draw_text(overlay->small_font_base, info_right, hud_top + 250.0f, 0.78f, 0.82f, 0.88f, 0.94f, line_buffer);
+
+  (void)snprintf(line_buffer, sizeof(line_buffer), "MODE %s", mode_label);
+  stats_overlay_draw_text(overlay->small_font_base, info_left, hud_top + 264.0f, 0.78f, 0.82f, 0.88f, 0.94f, line_buffer);
+  (void)snprintf(line_buffer, sizeof(line_buffer), "BLK %s %03d", block_label, active_overlay->metrics.placed_block_count);
+  stats_overlay_draw_text(overlay->small_font_base, info_right, hud_top + 264.0f, 0.78f, 0.82f, 0.88f, 0.94f, line_buffer);
+
+  (void)snprintf(
+    line_buffer,
+    sizeof(line_buffer),
+    "FOG %.0f%%  CLD %s",
+    active_overlay->settings.fog_density * 100.0f,
+    active_overlay->settings.clouds_enabled != 0 ? "ON" : "OFF");
+  stats_overlay_draw_text(overlay->small_font_base, info_left, hud_top + 278.0f, 0.78f, 0.82f, 0.88f, 0.94f, line_buffer);
+  (void)snprintf(line_buffer, sizeof(line_buffer), "TGT %s", active_overlay->metrics.target_active != 0 ? "ON" : "OFF");
+  stats_overlay_draw_text(overlay->small_font_base, info_right, hud_top + 278.0f, 0.78f, 0.82f, 0.88f, 0.94f, line_buffer);
+
+  if (active_overlay->cursor_mode_enabled == 0)
+  {
+    const float world_left = (float)active_overlay->panel_width;
+    const float center_x = world_left + ((float)width - world_left) * 0.5f;
+    const float center_y = (float)height * 0.5f;
+    const float cross_r = active_overlay->metrics.target_active != 0 ? 0.36f : 0.92f;
+    const float cross_g = active_overlay->metrics.target_active != 0 ? 0.92f : 0.96f;
+    const float cross_b = active_overlay->metrics.target_active != 0 ? 0.42f : 0.98f;
+
+    stats_overlay_draw_rect(center_x - 8.0f, center_y - 1.0f, center_x + 8.0f, center_y + 1.0f, cross_r, cross_g, cross_b, 0.85f);
+    stats_overlay_draw_rect(center_x - 1.0f, center_y - 8.0f, center_x + 1.0f, center_y + 8.0f, cross_r, cross_g, cross_b, 0.85f);
+  }
+
+  glPopMatrix();
+  glMatrixMode(GL_PROJECTION);
+  glPopMatrix();
+  glMatrixMode(GL_MODELVIEW);
+  glDisable(GL_BLEND);
+}
+
+static void stats_overlay_show_error(const char* title, const char* message)
+{
+  diagnostics_logf("%s: %s", title, message);
+  (void)MessageBoxA(NULL, message, title, MB_ICONERROR | MB_OK);
+}
+
+static int stats_overlay_build_font(GLuint* out_font_base, int font_height)
+{
+  HDC device_context = NULL;
+  HFONT font = NULL;
+  HGDIOBJ previous_font = NULL;
+  GLuint font_base = 0U;
+
+  if (out_font_base == NULL)
+  {
+    return 0;
+  }
+
+  device_context = wglGetCurrentDC();
+  if (device_context == NULL)
+  {
+    stats_overlay_show_error("OpenGL Error", "Failed to resolve the device context for the stats overlay font.");
+    return 0;
+  }
+
+  font = CreateFontA(
+    font_height,
+    0,
+    0,
+    0,
+    FW_NORMAL,
+    FALSE,
+    FALSE,
+    FALSE,
+    ANSI_CHARSET,
+    OUT_DEFAULT_PRECIS,
+    CLIP_DEFAULT_PRECIS,
+    CLEARTYPE_QUALITY,
+    FIXED_PITCH | FF_MODERN,
+    "Consolas"
+  );
+  if (font == NULL)
+  {
+    stats_overlay_show_error("Win32 Error", "Failed to create the stats overlay font.");
+    return 0;
+  }
+
+  previous_font = SelectObject(device_context, font);
+  font_base = glGenLists(96);
+  if (font_base == 0U || !wglUseFontBitmapsA(device_context, 32, 96, font_base))
+  {
+    if (font_base != 0U)
+    {
+      glDeleteLists(font_base, 96);
+    }
+    (void)SelectObject(device_context, previous_font);
+    (void)DeleteObject(font);
+    stats_overlay_show_error("Win32 Error", "Failed to build glyphs for the stats overlay.");
+    return 0;
+  }
+
+  (void)SelectObject(device_context, previous_font);
+  (void)DeleteObject(font);
+  *out_font_base = font_base;
+  return 1;
+}
+
+static void stats_overlay_draw_rect(float left, float top, float right, float bottom, float r, float g, float b, float a)
+{
+  glColor4f(r, g, b, a);
+  glBegin(GL_QUADS);
+  glVertex2f(left, top);
+  glVertex2f(right, top);
+  glVertex2f(right, bottom);
+  glVertex2f(left, bottom);
+  glEnd();
+}
+
+static void stats_overlay_draw_outline(float left, float top, float right, float bottom, float r, float g, float b, float a)
+{
+  glColor4f(r, g, b, a);
+  glBegin(GL_LINE_LOOP);
+  glVertex2f(left, top);
+  glVertex2f(right, top);
+  glVertex2f(right, bottom);
+  glVertex2f(left, bottom);
+  glEnd();
+}
+
+static float stats_overlay_get_font_glyph_width(const StatsOverlay* overlay, GLuint font_base)
+{
+  if (overlay == NULL)
+  {
+    return 8.0f;
+  }
+
+  if (font_base == overlay->hero_font_base)
+  {
+    return 14.0f;
+  }
+  if (font_base == overlay->large_font_base)
+  {
+    return 10.0f;
+  }
+  return 7.0f;
+}
+
+static void stats_overlay_draw_text(GLuint font_base, float x, float y, float r, float g, float b, float a, const char* text)
+{
+  unsigned char glyphs[256] = { 0 };
+  size_t length = 0U;
+  size_t i = 0U;
+
+  if (font_base == 0U || text == NULL || text[0] == '\0')
+  {
+    return;
+  }
+
+  length = strlen(text);
+  if (length > sizeof(glyphs))
+  {
+    length = sizeof(glyphs);
+  }
+
+  for (i = 0U; i < length; ++i)
+  {
+    unsigned char character = (unsigned char)text[i];
+    if (character < 32U || character > 127U)
+    {
+      character = (unsigned char)'?';
+    }
+    glyphs[i] = (unsigned char)(character - 32U);
+  }
+
+  glColor4f(r, g, b, a);
+  glRasterPos2f(x, y);
+  glListBase(font_base);
+  glCallLists((GLsizei)length, GL_UNSIGNED_BYTE, glyphs);
+}
+
+static void stats_overlay_draw_text_right(
+  const StatsOverlay* overlay,
+  GLuint font_base,
+  float right,
+  float y,
+  float r,
+  float g,
+  float b,
+  float a,
+  const char* text
+)
+{
+  const float glyph_width = stats_overlay_get_font_glyph_width(overlay, font_base);
+  const size_t length = (text != NULL) ? strlen(text) : 0U;
+  const float x = right - (float)length * glyph_width;
+  stats_overlay_draw_text(font_base, x, y, r, g, b, a, text);
+}
+
+static void stats_overlay_draw_text_shadow(
+  const StatsOverlay* overlay,
+  GLuint font_base,
+  float x,
+  float y,
+  float r,
+  float g,
+  float b,
+  float a,
+  const char* text
+)
+{
+  (void)overlay;
+  stats_overlay_draw_text(font_base, x + 1.0f, y + 1.0f, 0.0f, 0.0f, 0.0f, a * 0.55f, text);
+  stats_overlay_draw_text(font_base, x, y, r, g, b, a, text);
+}
+
+static void stats_overlay_push_frame_sample(StatsOverlay* overlay, float frame_time_ms)
+{
+  if (overlay == NULL || frame_time_ms <= 0.0f)
+  {
+    return;
+  }
+
+  overlay->frame_time_history[overlay->frame_time_history_write_index] = frame_time_ms;
+  overlay->frame_time_history_write_index =
+    (overlay->frame_time_history_write_index + 1) % (int)(sizeof(overlay->frame_time_history) / sizeof(overlay->frame_time_history[0]));
+
+  if (overlay->frame_time_history_count < (int)(sizeof(overlay->frame_time_history) / sizeof(overlay->frame_time_history[0])))
+  {
+    overlay->frame_time_history_count += 1;
+  }
+}
+
+static void stats_overlay_get_frame_extents(const StatsOverlay* overlay, float* out_min_ms, float* out_max_ms)
+{
+  int index = 0;
+  float min_ms = 0.0f;
+  float max_ms = 0.0f;
+
+  if (out_min_ms != NULL)
+  {
+    *out_min_ms = 0.0f;
+  }
+  if (out_max_ms != NULL)
+  {
+    *out_max_ms = 0.0f;
+  }
+  if (overlay == NULL || overlay->frame_time_history_count <= 0)
+  {
+    return;
+  }
+
+  min_ms = overlay->frame_time_history[0];
+  max_ms = overlay->frame_time_history[0];
+  for (index = 1; index < overlay->frame_time_history_count; ++index)
+  {
+    const float value = overlay->frame_time_history[index];
+    if (value < min_ms)
+    {
+      min_ms = value;
+    }
+    if (value > max_ms)
+    {
+      max_ms = value;
+    }
+  }
+
+  if (out_min_ms != NULL)
+  {
+    *out_min_ms = min_ms;
+  }
+  if (out_max_ms != NULL)
+  {
+    *out_max_ms = max_ms;
+  }
+}
+
+static void stats_overlay_draw_frame_graph(
+  const StatsOverlay* overlay,
+  float left,
+  float top,
+  float right,
+  float bottom,
+  float line_r,
+  float line_g,
+  float line_b
+)
+{
+  const float inner_left = left + 4.0f;
+  const float inner_top = top + 4.0f;
+  const float inner_right = right - 4.0f;
+  const float inner_bottom = bottom - 4.0f;
+  const float graph_width = inner_right - inner_left;
+  const float graph_height = inner_bottom - inner_top;
+  const int history_capacity = (int)(sizeof(overlay->frame_time_history) / sizeof(overlay->frame_time_history[0]));
+  const int sample_count = (overlay != NULL) ? overlay->frame_time_history_count : 0;
+  float min_ms = 0.0f;
+  float max_ms = 0.0f;
+  float display_max_ms = 18.0f;
+  int grid_index = 0;
+  int sample_index = 0;
+
+  stats_overlay_draw_rect(left, top, right, bottom, 0.02f, 0.03f, 0.03f, 0.68f);
+  stats_overlay_draw_rect(left, top, right, bottom, 0.06f, 0.12f, 0.08f, 0.08f);
+  stats_overlay_draw_outline(left + 0.5f, top + 0.5f, right - 0.5f, bottom - 0.5f, 0.20f, 0.28f, 0.22f, 0.32f);
+
+  for (grid_index = 0; grid_index < 3; ++grid_index)
+  {
+    const float y = inner_top + ((float)(grid_index + 1) / 4.0f) * graph_height;
+    stats_overlay_draw_rect(inner_left, y, inner_right, y + 1.0f, 0.18f, 0.26f, 0.18f, 0.22f);
+  }
+
+  if (overlay == NULL || sample_count <= 0 || graph_width <= 1.0f || graph_height <= 1.0f)
+  {
+    return;
+  }
+
+  stats_overlay_get_frame_extents(overlay, &min_ms, &max_ms);
+  if (max_ms > 0.01f)
+  {
+    display_max_ms = max_ms * 1.16f;
+  }
+  if (display_max_ms < 18.0f)
+  {
+    display_max_ms = 18.0f;
+  }
+  if (display_max_ms > 66.0f)
+  {
+    display_max_ms = 66.0f;
+  }
+
+  glLineWidth(3.0f);
+  glColor4f(line_r * 0.55f, line_g * 0.80f, line_b * 0.55f, 0.18f);
+  glBegin(GL_LINE_STRIP);
+  for (sample_index = 0; sample_index < sample_count; ++sample_index)
+  {
+    const int history_index = (overlay->frame_time_history_write_index - sample_count + sample_index + history_capacity) % history_capacity;
+    const float sample_value = overlay->frame_time_history[history_index];
+    const float normalized = (sample_value > 0.0f) ? (sample_value / display_max_ms) : 0.0f;
+    const float x = inner_left + ((sample_count > 1) ? ((float)sample_index / (float)(sample_count - 1)) : 0.0f) * graph_width;
+    const float y = inner_bottom - fminf(normalized, 1.0f) * graph_height;
+    glVertex2f(x, y);
+  }
+  glEnd();
+
+  glLineWidth(1.5f);
+  glColor4f(0.12f, 0.98f, 0.22f, 0.95f);
+  glBegin(GL_LINE_STRIP);
+  for (sample_index = 0; sample_index < sample_count; ++sample_index)
+  {
+    const int history_index = (overlay->frame_time_history_write_index - sample_count + sample_index + history_capacity) % history_capacity;
+    const float sample_value = overlay->frame_time_history[history_index];
+    const float normalized = (sample_value > 0.0f) ? (sample_value / display_max_ms) : 0.0f;
+    const float x = inner_left + ((sample_count > 1) ? ((float)sample_index / (float)(sample_count - 1)) : 0.0f) * graph_width;
+    const float y = inner_bottom - fminf(normalized, 1.0f) * graph_height;
+    glVertex2f(x, y);
+  }
+  glEnd();
+  glLineWidth(1.0f);
+
+  if (sample_count > 0)
+  {
+    const int last_history_index = (overlay->frame_time_history_write_index - 1 + history_capacity) % history_capacity;
+    const float sample_value = overlay->frame_time_history[last_history_index];
+    const float normalized = (sample_value > 0.0f) ? (sample_value / display_max_ms) : 0.0f;
+    const float x = inner_right;
+    const float y = inner_bottom - fminf(normalized, 1.0f) * graph_height;
+
+    stats_overlay_draw_rect(x - 2.0f, y - 2.0f, x + 2.0f, y + 2.0f, 0.78f, 1.0f, 0.82f, 0.96f);
+  }
+}

@@ -1,0 +1,9 @@
+#ifndef RESOURCE_H
+#define RESOURCE_H
+
+#define IDR_SHADER_SKY_VERT 101
+#define IDR_SHADER_SKY_FRAG 102
+#define IDR_SHADER_POST_VERT 103
+#define IDR_SHADER_POST_FRAG 104
+
+#endif
