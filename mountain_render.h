@@ -11,7 +11,8 @@ int mountain_render_update(
   MountainRenderMesh* mesh,
   const CameraState* camera,
   const SceneSettings* settings,
-  const RendererQualityProfile* quality);
+  const RendererQualityProfile* quality,
+  const ViewFrustum* frustum);
 void mountain_render_draw(const MountainRenderMesh* mesh);
 
 #endif

@@ -11,7 +11,8 @@ int tree_render_update(
   TreeRenderMesh* mesh,
   const CameraState* camera,
   const SceneSettings* settings,
-  const RendererQualityProfile* quality);
+  const RendererQualityProfile* quality,
+  const ViewFrustum* frustum);
 void tree_render_draw(const TreeRenderMesh* mesh);
 
 #endif

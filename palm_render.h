@@ -5,6 +5,7 @@
 #include "gl_headers.h"
 #include "render_quality.h"
 #include "scene_settings.h"
+#include "view_frustum.h"
 
 #include <stddef.h>
 
@@ -29,8 +30,11 @@ typedef struct PalmRenderVariant
   GLuint diffuse_texture;
   GLsizei vertex_count;
   GLsizei instance_count;
+  GLsizei visible_instance_count;
   void* cpu_instances;
+  void* cpu_visible_instances;
   size_t cpu_instance_capacity;
+  size_t cpu_visible_instance_capacity;
   float model_height;
   float model_radius;
   int category;
@@ -73,6 +77,13 @@ int palm_render_update_category(
   const CameraState* camera,
   const SceneSettings* settings,
   const RendererQualityProfile* quality);
+int palm_render_update_category_with_frustum(
+  PalmRenderMesh* mesh,
+  PalmRenderCategory category,
+  const CameraState* camera,
+  const SceneSettings* settings,
+  const RendererQualityProfile* quality,
+  const ViewFrustum* frustum);
 int palm_render_update(
   PalmRenderMesh* mesh,
   const CameraState* camera,

@@ -14,9 +14,10 @@ int tree_render_update(
   TreeRenderMesh* mesh,
   const CameraState* camera,
   const SceneSettings* settings,
-  const RendererQualityProfile* quality)
+  const RendererQualityProfile* quality,
+  const ViewFrustum* frustum)
 {
-  return palm_render_update_category(mesh, PALM_RENDER_CATEGORY_TREE, camera, settings, quality);
+  return palm_render_update_category_with_frustum(mesh, PALM_RENDER_CATEGORY_TREE, camera, settings, quality, frustum);
 }
 
 void tree_render_draw(const TreeRenderMesh* mesh)

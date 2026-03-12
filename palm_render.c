@@ -173,6 +173,7 @@ static int palm_render_load_model_vertices(
 static int palm_render_create_variant(PalmRenderVariant* variant, const PalmRenderAssetSpec* asset_spec);
 static void palm_render_destroy_variant(PalmRenderVariant* variant);
 static int palm_render_reserve_instances(PalmRenderVariant* variant, size_t required_instance_capacity);
+static int palm_render_reserve_visible_instances(PalmRenderVariant* variant, size_t required_instance_capacity);
 static float palm_render_clamp(float value, float min_value, float max_value);
 static float palm_render_mix(float a, float b, float t);
 static float palm_render_get_terrain_step_for_quality(const RendererQualityProfile* quality);
@@ -187,8 +188,12 @@ static int palm_render_has_category(const PalmRenderMesh* mesh, int category);
 static GLsizei palm_render_get_max_vertex_count_for_category(const PalmRenderMesh* mesh, int category);
 static PalmRenderVariant* palm_render_pick_variant(PalmRenderMesh* mesh, int category, int grid_x, int grid_z, unsigned int seed);
 static void palm_render_reset_instances(PalmRenderMesh* mesh);
-static int palm_render_upload_instances(PalmRenderMesh* mesh);
+static int palm_render_upload_instances(PalmRenderMesh* mesh, const ViewFrustum* frustum);
 static int palm_render_float_nearly_equal(float a, float b, float epsilon);
+static int palm_render_instance_intersects_frustum(
+  const PalmRenderVariant* variant,
+  const PalmInstanceData* instance,
+  const ViewFrustum* frustum);
 static int palm_render_cache_matches(
   const PalmRenderMesh* mesh,
   int grid_min_x,
@@ -420,9 +425,16 @@ static void palm_render_destroy_variant(PalmRenderVariant* variant)
     free(variant->cpu_instances);
     variant->cpu_instances = NULL;
   }
+  if (variant->cpu_visible_instances != NULL)
+  {
+    free(variant->cpu_visible_instances);
+    variant->cpu_visible_instances = NULL;
+  }
   variant->cpu_instance_capacity = 0U;
+  variant->cpu_visible_instance_capacity = 0U;
   variant->vertex_count = 0;
   variant->instance_count = 0;
+  variant->visible_instance_count = 0;
   variant->model_height = 0.0f;
   variant->model_radius = 0.0f;
   variant->category = PALM_RENDER_CATEGORY_PALM;
@@ -459,6 +471,17 @@ int palm_render_update_category(
   const SceneSettings* settings,
   const RendererQualityProfile* quality)
 {
+  return palm_render_update_category_with_frustum(mesh, category, camera, settings, quality, NULL);
+}
+
+int palm_render_update_category_with_frustum(
+  PalmRenderMesh* mesh,
+  PalmRenderCategory category,
+  const CameraState* camera,
+  const SceneSettings* settings,
+  const RendererQualityProfile* quality,
+  const ViewFrustum* frustum)
+{
   const SceneSettings fallback_settings = scene_settings_default();
   const SceneSettings* active_settings = (settings != NULL) ? settings : &fallback_settings;
   int populate_result = 1;
@@ -477,14 +500,15 @@ int palm_render_update_category(
   {
     for (variant_index = 0; variant_index < mesh->variant_count; ++variant_index)
     {
-      if (mesh->variants[variant_index].instance_count > 0)
+      if (mesh->variants[variant_index].instance_count > 0 || mesh->variants[variant_index].visible_instance_count > 0)
       {
         had_instances = 1;
       }
       mesh->variants[variant_index].instance_count = 0;
+      mesh->variants[variant_index].visible_instance_count = 0;
     }
     mesh->cache_valid = 0;
-    return had_instances ? palm_render_upload_instances(mesh) : 1;
+    return had_instances ? palm_render_upload_instances(mesh, frustum) : 1;
   }
 
   switch (category)
@@ -511,10 +535,10 @@ int palm_render_update_category(
   }
   if (populate_result == 2)
   {
-    return 1;
+    return (frustum != NULL) ? palm_render_upload_instances(mesh, frustum) : 1;
   }
 
-  return palm_render_upload_instances(mesh);
+  return palm_render_upload_instances(mesh, frustum);
 }
 
 int palm_render_update(
@@ -539,7 +563,7 @@ void palm_render_draw(const PalmRenderMesh* mesh)
   {
     const PalmRenderVariant* variant = &mesh->variants[variant_index];
 
-    if (variant->vao == 0U || variant->vertex_count <= 0 || variant->instance_count <= 0)
+    if (variant->vao == 0U || variant->vertex_count <= 0 || variant->visible_instance_count <= 0)
     {
       continue;
     }
@@ -547,7 +571,7 @@ void palm_render_draw(const PalmRenderMesh* mesh)
     glActiveTexture(GL_TEXTURE3);
     glBindTexture(GL_TEXTURE_2D, variant->diffuse_texture);
     glBindVertexArray(variant->vao);
-    glDrawArraysInstanced(GL_TRIANGLES, 0, variant->vertex_count, variant->instance_count);
+    glDrawArraysInstanced(GL_TRIANGLES, 0, variant->vertex_count, variant->visible_instance_count);
   }
   glActiveTexture(GL_TEXTURE3);
   glBindTexture(GL_TEXTURE_2D, 0);
@@ -1867,6 +1891,30 @@ static int palm_render_reserve_instances(PalmRenderVariant* variant, size_t requ
   return 1;
 }
 
+static int palm_render_reserve_visible_instances(PalmRenderVariant* variant, size_t required_instance_capacity)
+{
+  if (variant == NULL)
+  {
+    return 0;
+  }
+  if (required_instance_capacity <= variant->cpu_visible_instance_capacity)
+  {
+    return 1;
+  }
+
+  if (!palm_render_reserve_memory(
+    &variant->cpu_visible_instances,
+    &variant->cpu_visible_instance_capacity,
+    required_instance_capacity,
+    sizeof(PalmInstanceData)))
+  {
+    palm_render_show_error("Memory Error", "Failed to allocate visible palm instance data.");
+    return 0;
+  }
+
+  return 1;
+}
+
 static void palm_render_reset_instances(PalmRenderMesh* mesh)
 {
   int variant_index = 0;
@@ -1879,10 +1927,11 @@ static void palm_render_reset_instances(PalmRenderMesh* mesh)
   for (variant_index = 0; variant_index < mesh->variant_count; ++variant_index)
   {
     mesh->variants[variant_index].instance_count = 0;
+    mesh->variants[variant_index].visible_instance_count = 0;
   }
 }
 
-static int palm_render_upload_instances(PalmRenderMesh* mesh)
+static int palm_render_upload_instances(PalmRenderMesh* mesh, const ViewFrustum* frustum)
 {
   int variant_index = 0;
 
@@ -1894,12 +1943,46 @@ static int palm_render_upload_instances(PalmRenderMesh* mesh)
   for (variant_index = 0; variant_index < mesh->variant_count; ++variant_index)
   {
     PalmRenderVariant* variant = &mesh->variants[variant_index];
+    const void* upload_instances = NULL;
+    GLsizei upload_count = variant->instance_count;
+
+    if (frustum != NULL && frustum->valid != 0)
+    {
+      const PalmInstanceData* source_instances = (const PalmInstanceData*)variant->cpu_instances;
+      PalmInstanceData* visible_instances = NULL;
+      GLsizei instance_index = 0;
+
+      if (variant->instance_count > 0 && !palm_render_reserve_visible_instances(variant, (size_t)variant->instance_count))
+      {
+        return 0;
+      }
+
+      visible_instances = (PalmInstanceData*)variant->cpu_visible_instances;
+      variant->visible_instance_count = 0;
+      for (instance_index = 0; instance_index < variant->instance_count; ++instance_index)
+      {
+        if (!palm_render_instance_intersects_frustum(variant, &source_instances[instance_index], frustum))
+        {
+          continue;
+        }
+        visible_instances[variant->visible_instance_count] = source_instances[instance_index];
+        variant->visible_instance_count += 1;
+      }
+
+      upload_instances = (variant->visible_instance_count > 0) ? visible_instances : NULL;
+      upload_count = variant->visible_instance_count;
+    }
+    else
+    {
+      variant->visible_instance_count = variant->instance_count;
+      upload_instances = (variant->instance_count > 0) ? variant->cpu_instances : NULL;
+    }
 
     glBindBuffer(GL_ARRAY_BUFFER, variant->instance_buffer);
     glBufferData(
       GL_ARRAY_BUFFER,
-      sizeof(PalmInstanceData) * (size_t)variant->instance_count,
-      (variant->instance_count > 0) ? variant->cpu_instances : NULL,
+      sizeof(PalmInstanceData) * (size_t)upload_count,
+      upload_instances,
       GL_DYNAMIC_DRAW);
   }
   glBindBuffer(GL_ARRAY_BUFFER, 0);
@@ -1909,6 +1992,39 @@ static int palm_render_upload_instances(PalmRenderMesh* mesh)
 static int palm_render_float_nearly_equal(float a, float b, float epsilon)
 {
   return fabsf(a - b) <= epsilon;
+}
+
+static int palm_render_instance_intersects_frustum(
+  const PalmRenderVariant* variant,
+  const PalmInstanceData* instance,
+  const ViewFrustum* frustum)
+{
+  float scale = 1.0f;
+  float half_height = 0.5f;
+  float footprint_radius = 0.5f;
+  float sphere_radius = 0.5f;
+
+  if (variant == NULL || instance == NULL || frustum == NULL || frustum->valid == 0)
+  {
+    return 1;
+  }
+
+  scale = fabsf(instance->transform[5]);
+  if (scale < 0.0001f)
+  {
+    scale = 1.0f;
+  }
+
+  half_height = variant->model_height * scale * 0.5f;
+  footprint_radius = variant->model_radius * scale;
+  sphere_radius = sqrtf(half_height * half_height + footprint_radius * footprint_radius);
+
+  return view_frustum_contains_sphere(
+    frustum,
+    instance->transform[12],
+    instance->transform[13] + half_height,
+    instance->transform[14],
+    sphere_radius);
 }
 
 static int palm_render_cache_matches(
@@ -2183,6 +2299,8 @@ static int palm_render_populate_tree_instances(
   ProceduralLodConfig lod_config;
   ProceduralLodState lod_state;
   const GLsizei max_vertex_count = palm_render_get_max_vertex_count_for_category(mesh, PALM_RENDER_CATEGORY_TREE);
+  const float tree_density_scale =
+    (quality != NULL) ? palm_render_clamp(quality->tree_density_scale, 0.35f, 1.0f) : 1.0f;
   float radius = 0.0f;
   int effective_tree_target = 0;
   float cell_size = 0.0f;
@@ -2193,14 +2311,14 @@ static int palm_render_populate_tree_instances(
     return 1;
   }
 
-  lod_config.requested_radius = settings->palm_render_radius;
+  lod_config.requested_radius = settings->palm_render_radius * palm_render_mix(0.78f, 1.0f, tree_density_scale);
   lod_config.requested_radius_min = 80.0f;
   lod_config.requested_radius_max = 900.0f;
   lod_config.radius_scale_low = 1.08f;
   lod_config.radius_scale_high = 1.22f;
   lod_config.effective_radius_min = 94.0f;
   lod_config.effective_radius_max = 1120.0f;
-  lod_config.requested_instance_count = settings->palm_count * 0.22f;
+  lod_config.requested_instance_count = settings->palm_count * 0.22f * tree_density_scale;
   lod_config.requested_instance_count_min = 0.0f;
   lod_config.requested_instance_count_max = 1500.0f;
   lod_config.instance_budget_min = 12;
@@ -2335,6 +2453,8 @@ static int palm_render_populate_grass_instances(
   ProceduralLodConfig lod_config;
   ProceduralLodState lod_state;
   const GLsizei max_vertex_count = palm_render_get_max_vertex_count_for_category(mesh, PALM_RENDER_CATEGORY_GRASS);
+  const float grass_density_scale =
+    (quality != NULL) ? palm_render_clamp(quality->grass_density_scale, 0.25f, 1.0f) : 1.0f;
   float radius = 0.0f;
   int effective_grass_target = 0;
   float cell_size = 0.0f;
@@ -2345,14 +2465,14 @@ static int palm_render_populate_grass_instances(
     return 1;
   }
 
-  lod_config.requested_radius = settings->palm_render_radius;
+  lod_config.requested_radius = settings->palm_render_radius * palm_render_mix(0.62f, 1.0f, grass_density_scale);
   lod_config.requested_radius_min = 80.0f;
   lod_config.requested_radius_max = 900.0f;
   lod_config.radius_scale_low = 1.00f;
   lod_config.radius_scale_high = 1.08f;
   lod_config.effective_radius_min = 72.0f;
   lod_config.effective_radius_max = 760.0f;
-  lod_config.requested_instance_count = settings->palm_count * 12.0f;
+  lod_config.requested_instance_count = settings->palm_count * 12.0f * grass_density_scale;
   lod_config.requested_instance_count_min = 0.0f;
   lod_config.requested_instance_count_max = 12000.0f;
   lod_config.instance_budget_min = 48;

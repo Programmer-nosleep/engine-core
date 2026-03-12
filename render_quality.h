@@ -14,6 +14,10 @@ typedef struct RendererQualityProfile
   int enable_pathtrace;
   int enable_post_ao;
   int enable_full_clouds;
+  int shadow_update_interval;
+  int enable_grass_shadows;
+  float tree_density_scale;
+  float grass_density_scale;
 } RendererQualityProfile;
 
 RendererQualityProfile render_quality_pick(const char* renderer_name, const char* vendor_name);

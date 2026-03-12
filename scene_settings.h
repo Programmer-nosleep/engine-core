@@ -53,14 +53,14 @@ static inline SceneSettings scene_settings_default(void)
     0.24f,
     0.54f,
     1.0f,
-    -14.0f,
-    1.0f,
-    1.0f,
-    1.0f,
-    1.0f,
-    24.0f,
+    -40.0f,
+    0.35f,
     0.55f,
-    260.0f,
+    0.0f,
+    0.55f,
+    0.0f,
+    0.0f,
+    120.0f,
     1
   };
   return settings;

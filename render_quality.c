@@ -23,7 +23,10 @@ RendererQualityProfile render_quality_pick(const char* renderer_name, const char
     1,
     0,
     1,
-    1
+    1,
+    1,
+    1.0f,
+    1.0f
   };
 
   if (render_quality_contains_case_insensitive(renderer_name, "intel") ||
@@ -32,23 +35,27 @@ RendererQualityProfile render_quality_pick(const char* renderer_name, const char
     render_quality_contains_case_insensitive(vendor_name, "intel"))
   {
     profile.name = "iGPU";
-    profile.render_scale = 0.80f;
-    profile.trace_distance_scale = 0.40f;
-    profile.shadow_extent = 220.0f;
-    profile.shadow_map_size = 1024;
-    profile.terrain_resolution = 257;
+    profile.render_scale = 0.72f;
+    profile.trace_distance_scale = 0.34f;
+    profile.shadow_extent = 160.0f;
+    profile.shadow_map_size = 768;
+    profile.terrain_resolution = 193;
     profile.shadow_terrain_resolution = 0;
     profile.enable_raytrace = 0;
     profile.enable_pathtrace = 0;
     profile.enable_post_ao = 0;
     profile.enable_full_clouds = 0;
+    profile.shadow_update_interval = 3;
+    profile.enable_grass_shadows = 0;
+    profile.tree_density_scale = 0.72f;
+    profile.grass_density_scale = 0.46f;
   }
   else if (dedicated_memory_mb > 0U && dedicated_memory_mb <= 4096U)
   {
     profile.name = "Hybrid";
-    profile.render_scale = 0.90f;
-    profile.trace_distance_scale = 0.48f;
-    profile.shadow_extent = 200.0f;
+    profile.render_scale = 0.86f;
+    profile.trace_distance_scale = 0.46f;
+    profile.shadow_extent = 180.0f;
     profile.shadow_map_size = 1024;
     profile.terrain_resolution = 257;
     profile.shadow_terrain_resolution = 0;
@@ -56,6 +63,10 @@ RendererQualityProfile render_quality_pick(const char* renderer_name, const char
     profile.enable_pathtrace = 0;
     profile.enable_post_ao = 0;
     profile.enable_full_clouds = 0;
+    profile.shadow_update_interval = 2;
+    profile.enable_grass_shadows = 0;
+    profile.tree_density_scale = 0.86f;
+    profile.grass_density_scale = 0.70f;
   }
 
   return profile;

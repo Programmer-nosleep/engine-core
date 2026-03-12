@@ -14,9 +14,10 @@ int grass_render_update(
   GrassRenderMesh* mesh,
   const CameraState* camera,
   const SceneSettings* settings,
-  const RendererQualityProfile* quality)
+  const RendererQualityProfile* quality,
+  const ViewFrustum* frustum)
 {
-  return palm_render_update_category(mesh, PALM_RENDER_CATEGORY_GRASS, camera, settings, quality);
+  return palm_render_update_category_with_frustum(mesh, PALM_RENDER_CATEGORY_GRASS, camera, settings, quality, frustum);
 }
 
 void grass_render_draw(const GrassRenderMesh* mesh)

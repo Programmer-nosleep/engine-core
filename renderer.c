@@ -9,6 +9,7 @@
 #include "platform_support.h"
 #include "terrain.h"
 #include "tree_render.h"
+#include "view_frustum.h"
 
 #include <math.h>
 #include <stddef.h>
@@ -74,7 +75,7 @@ int renderer_create(Renderer* renderer, int width, int height)
   vendor_name = (const char*)glGetString(GL_VENDOR);
   renderer->quality = render_quality_pick(renderer_name, vendor_name);
   diagnostics_logf(
-    "renderer_create: quality=%s render_scale=%.2f shadow=%d shadow_extent=%.1f terrain=%d shadow_terrain=%d raytrace=%d pathtrace=%d post_ao=%d clouds=%d gpu=%s vendor=%s",
+    "renderer_create: quality=%s render_scale=%.2f shadow=%d shadow_extent=%.1f terrain=%d shadow_terrain=%d raytrace=%d pathtrace=%d post_ao=%d clouds=%d shadow_interval=%d grass_shadow=%d tree_density=%.2f grass_density=%.2f gpu=%s vendor=%s",
     renderer->quality.name,
     renderer->quality.render_scale,
     renderer->quality.shadow_map_size,
@@ -85,6 +86,10 @@ int renderer_create(Renderer* renderer, int width, int height)
     renderer->quality.enable_pathtrace,
     renderer->quality.enable_post_ao,
     renderer->quality.enable_full_clouds,
+    renderer->quality.shadow_update_interval,
+    renderer->quality.enable_grass_shadows,
+    renderer->quality.tree_density_scale,
+    renderer->quality.grass_density_scale,
     (renderer_name != NULL) ? renderer_name : "unknown",
     (vendor_name != NULL) ? vendor_name : "unknown"
   );
@@ -368,6 +373,11 @@ void renderer_render(
   const SceneSettings* active_settings = (settings != NULL) ? settings : &fallback_settings;
   const Matrix projection = math_get_projection_matrix(renderer->width, renderer->height, active_settings->camera_fov_degrees);
   const Matrix view = math_get_view_matrix(camera->x, camera->y, camera->z, camera->yaw, camera->pitch);
+  const ViewFrustum world_frustum = view_frustum_build(
+    camera,
+    renderer->width,
+    renderer->height,
+    active_settings->camera_fov_degrees);
   float terrain_origin_x = 0.0f;
   float terrain_origin_z = 0.0f;
   const GLfloat terrain_shape[4] = {
@@ -384,54 +394,63 @@ void renderer_render(
   };
   const GLfloat camera_position[3] = { camera->x, camera->y, camera->z };
   const Matrix light_view_projection = renderer_get_light_view_projection_matrix(renderer, camera, atmosphere, active_settings);
+  const int shadow_update_interval = (renderer->quality.shadow_update_interval > 1) ? renderer->quality.shadow_update_interval : 1;
+  const int refresh_shadows = (renderer->shadow_ready == 0) || ((renderer->frame_index % (unsigned int)shadow_update_interval) == 0U);
 
   (void)palm_render_update(&renderer->palm_mesh, camera, active_settings, &renderer->quality);
-  (void)mountain_render_update(&renderer->mountain_mesh, camera, active_settings, &renderer->quality);
-  (void)tree_render_update(&renderer->tree_mesh, camera, active_settings, &renderer->quality);
-  (void)grass_render_update(&renderer->grass_mesh, camera, active_settings, &renderer->quality);
+  (void)mountain_render_update(&renderer->mountain_mesh, camera, active_settings, &renderer->quality, &world_frustum);
+  (void)tree_render_update(&renderer->tree_mesh, camera, active_settings, &renderer->quality, &world_frustum);
+  (void)grass_render_update(&renderer->grass_mesh, camera, active_settings, &renderer->quality, &world_frustum);
   renderer_get_terrain_origin(renderer, camera, &terrain_origin_x, &terrain_origin_z);
 
-  glEnable(GL_DEPTH_TEST);
-  glDepthMask(GL_TRUE);
-  glBindFramebuffer(GL_FRAMEBUFFER, renderer->shadow_framebuffer);
-  glViewport(0, 0, renderer->quality.shadow_map_size, renderer->quality.shadow_map_size);
-  glClear(GL_DEPTH_BUFFER_BIT);
-  glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
-  glEnable(GL_POLYGON_OFFSET_FILL);
-  glPolygonOffset(2.0f, 4.0f);
+  if (refresh_shadows)
+  {
+    glEnable(GL_DEPTH_TEST);
+    glDepthMask(GL_TRUE);
+    glBindFramebuffer(GL_FRAMEBUFFER, renderer->shadow_framebuffer);
+    glViewport(0, 0, renderer->quality.shadow_map_size, renderer->quality.shadow_map_size);
+    glClear(GL_DEPTH_BUFFER_BIT);
+    glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+    glEnable(GL_POLYGON_OFFSET_FILL);
+    glPolygonOffset(2.0f, 4.0f);
 
-  glUseProgram(renderer->shadow_program);
-  if (renderer->shadow_light_view_projection_location >= 0)
-  {
-    glUniformMatrix4fv(renderer->shadow_light_view_projection_location, 1, GL_FALSE, light_view_projection.m);
-  }
-  if (renderer->shadow_origin_location >= 0)
-  {
-    glUniform2f(renderer->shadow_origin_location, terrain_origin_x, terrain_origin_z);
-  }
-  if (renderer->shadow_shape_location >= 0)
-  {
-    glUniform4fv(renderer->shadow_shape_location, 1, terrain_shape);
-  }
-  glBindVertexArray(renderer->shadow_terrain_vao != 0U ? renderer->shadow_terrain_vao : renderer->terrain_vao);
-  glDrawElements(
-    GL_TRIANGLES,
-    (renderer->shadow_terrain_vao != 0U) ? renderer->shadow_terrain_index_count : renderer->terrain_index_count,
-    GL_UNSIGNED_INT,
-    NULL);
-  glUseProgram(renderer->palm_shadow_program);
-  if (renderer->palm_shadow_light_view_projection_location >= 0)
-  {
-    glUniformMatrix4fv(renderer->palm_shadow_light_view_projection_location, 1, GL_FALSE, light_view_projection.m);
-  }
-  glDisable(GL_CULL_FACE);
-  palm_render_draw(&renderer->palm_mesh);
-  tree_render_draw(&renderer->tree_mesh);
-  grass_render_draw(&renderer->grass_mesh);
-  glEnable(GL_CULL_FACE);
+    glUseProgram(renderer->shadow_program);
+    if (renderer->shadow_light_view_projection_location >= 0)
+    {
+      glUniformMatrix4fv(renderer->shadow_light_view_projection_location, 1, GL_FALSE, light_view_projection.m);
+    }
+    if (renderer->shadow_origin_location >= 0)
+    {
+      glUniform2f(renderer->shadow_origin_location, terrain_origin_x, terrain_origin_z);
+    }
+    if (renderer->shadow_shape_location >= 0)
+    {
+      glUniform4fv(renderer->shadow_shape_location, 1, terrain_shape);
+    }
+    glBindVertexArray(renderer->shadow_terrain_vao != 0U ? renderer->shadow_terrain_vao : renderer->terrain_vao);
+    glDrawElements(
+      GL_TRIANGLES,
+      (renderer->shadow_terrain_vao != 0U) ? renderer->shadow_terrain_index_count : renderer->terrain_index_count,
+      GL_UNSIGNED_INT,
+      NULL);
+    glUseProgram(renderer->palm_shadow_program);
+    if (renderer->palm_shadow_light_view_projection_location >= 0)
+    {
+      glUniformMatrix4fv(renderer->palm_shadow_light_view_projection_location, 1, GL_FALSE, light_view_projection.m);
+    }
+    glDisable(GL_CULL_FACE);
+    palm_render_draw(&renderer->palm_mesh);
+    tree_render_draw(&renderer->tree_mesh);
+    if (renderer->quality.enable_grass_shadows != 0)
+    {
+      grass_render_draw(&renderer->grass_mesh);
+    }
+    glEnable(GL_CULL_FACE);
 
-  glDisable(GL_POLYGON_OFFSET_FILL);
-  glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glDisable(GL_POLYGON_OFFSET_FILL);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    renderer->shadow_ready = 1;
+  }
 
   glBindFramebuffer(GL_FRAMEBUFFER, renderer->framebuffer);
   glViewport(0, 0, renderer->framebuffer_width, renderer->framebuffer_height);
@@ -608,6 +627,7 @@ void renderer_render(
   glActiveTexture(GL_TEXTURE0);
   glBindTexture(GL_TEXTURE_2D, 0);
   glUseProgram(0);
+  renderer->frame_index += 1U;
 }
 
 float renderer_get_terrain_height(float x, float z, const SceneSettings* settings)

@@ -11,7 +11,8 @@ int grass_render_update(
   GrassRenderMesh* mesh,
   const CameraState* camera,
   const SceneSettings* settings,
-  const RendererQualityProfile* quality);
+  const RendererQualityProfile* quality,
+  const ViewFrustum* frustum);
 void grass_render_draw(const GrassRenderMesh* mesh);
 
 #endif

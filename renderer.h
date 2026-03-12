@@ -80,6 +80,8 @@ typedef struct Renderer
   RendererQualityProfile quality;
   GLsizei terrain_index_count;
   GLsizei shadow_terrain_index_count;
+  unsigned int frame_index;
+  int shadow_ready;
   int width;
   int height;
   int framebuffer_width;

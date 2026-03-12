@@ -361,6 +361,7 @@ else()
     system_monitor.c
     terrain.c
     tree_render.c
+    view_frustum.c
   )
 
   if("${OPENGL_SKY_PLATFORM_OS}" STREQUAL "Windows")
