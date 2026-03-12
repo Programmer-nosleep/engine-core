@@ -11,7 +11,7 @@
 
 enum
 {
-  PALM_RENDER_MAX_VARIANTS = 5
+  PALM_RENDER_MAX_VARIANTS = 10
 };
 
 typedef enum PalmRenderCategory
@@ -19,7 +19,8 @@ typedef enum PalmRenderCategory
   PALM_RENDER_CATEGORY_PALM = 0,
   PALM_RENDER_CATEGORY_TREE = 1,
   PALM_RENDER_CATEGORY_GRASS = 2,
-  PALM_RENDER_CATEGORY_MOUNTAIN = 3
+  PALM_RENDER_CATEGORY_MOUNTAIN = 3,
+  PALM_RENDER_CATEGORY_HOUSE = 4
 } PalmRenderCategory;
 
 typedef struct PalmRenderVariant
@@ -56,8 +57,14 @@ typedef struct PalmRenderMesh
   int cache_grid_max_x;
   int cache_grid_min_z;
   int cache_grid_max_z;
+  int cache_house_grid_min_x;
+  int cache_house_grid_max_x;
+  int cache_house_grid_min_z;
+  int cache_house_grid_max_z;
   float cache_radius;
   float cache_cell_size;
+  float cache_house_radius;
+  float cache_house_cell_size;
   float cache_palm_size;
   float cache_palm_count;
   float cache_palm_fruit_density;

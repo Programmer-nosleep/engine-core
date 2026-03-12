@@ -13,6 +13,7 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <string.h>
 
 #if defined(_MSC_VER)
@@ -73,7 +74,7 @@ typedef struct PalmMaterial
 
 typedef struct PalmRenderAssetSpec
 {
-  const char* relative_obj_path;
+  const char* relative_asset_path;
   int category;
   float desired_height_min;
   float desired_height_max;
@@ -112,6 +113,122 @@ typedef struct PalmMaterialArray
   size_t capacity;
 } PalmMaterialArray;
 
+typedef enum PalmJsonType
+{
+  PALM_JSON_UNDEFINED = 0,
+  PALM_JSON_OBJECT = 1,
+  PALM_JSON_ARRAY = 2,
+  PALM_JSON_STRING = 3,
+  PALM_JSON_PRIMITIVE = 4
+} PalmJsonType;
+
+typedef struct PalmJsonToken
+{
+  PalmJsonType type;
+  int start;
+  int end;
+  int size;
+  int parent;
+} PalmJsonToken;
+
+typedef struct PalmJsonParser
+{
+  unsigned int position;
+  unsigned int next_token;
+  int parent_token;
+} PalmJsonParser;
+
+typedef struct PalmGltfBufferView
+{
+  size_t byte_offset;
+  size_t byte_length;
+  size_t byte_stride;
+} PalmGltfBufferView;
+
+typedef struct PalmGltfAccessor
+{
+  int buffer_view_index;
+  size_t byte_offset;
+  size_t count;
+  int component_type;
+  int component_count;
+  int normalized;
+} PalmGltfAccessor;
+
+typedef struct PalmGltfTexture
+{
+  int image_index;
+} PalmGltfTexture;
+
+typedef struct PalmGltfMaterial
+{
+  PalmColor base_color;
+  int has_base_color;
+  int base_color_texture_index;
+} PalmGltfMaterial;
+
+typedef struct PalmGltfImage
+{
+  const unsigned char* bytes;
+  size_t byte_length;
+} PalmGltfImage;
+
+typedef struct PalmGltfDecodedImage
+{
+  unsigned char* pixels;
+  int width;
+  int height;
+  int channels;
+} PalmGltfDecodedImage;
+
+typedef struct PalmGltfPrimitive
+{
+  int indices_accessor_index;
+  int position_accessor_index;
+  int normal_accessor_index;
+  int texcoord_accessor_index;
+  int material_index;
+  int mode;
+} PalmGltfPrimitive;
+
+typedef struct PalmGltfMesh
+{
+  PalmGltfPrimitive* primitives;
+  size_t primitive_count;
+} PalmGltfMesh;
+
+typedef struct PalmGltfNode
+{
+  int mesh_index;
+  int* children;
+  size_t child_count;
+  float transform[16];
+} PalmGltfNode;
+
+typedef struct PalmGltfDocument
+{
+  PalmGltfBufferView* buffer_views;
+  PalmGltfAccessor* accessors;
+  PalmGltfTexture* textures;
+  PalmGltfMaterial* materials;
+  PalmGltfImage* images;
+  PalmGltfDecodedImage* decoded_images;
+  PalmGltfMesh* meshes;
+  PalmGltfNode* nodes;
+  int* scene_roots;
+  size_t buffer_view_count;
+  size_t accessor_count;
+  size_t texture_count;
+  size_t material_count;
+  size_t image_count;
+  size_t mesh_count;
+  size_t node_count;
+  size_t scene_root_count;
+  unsigned char* owned_data;
+  const unsigned char* binary_chunk;
+  size_t binary_chunk_size;
+} PalmGltfDocument;
+
 enum
 {
   PALM_RENDER_MAX_FACE_VERTICES = 32
@@ -119,13 +236,16 @@ enum
 
 static const float k_palm_render_pi = 3.14159265f;
 static const float k_palm_render_terrain_half_extent = 3200.0f;
-static const PalmRenderAssetSpec k_palm_render_asset_specs[PALM_RENDER_MAX_VARIANTS] = {
+static const PalmRenderAssetSpec k_palm_render_asset_specs[] = {
   { "res/obj/kelapasawit.obj", PALM_RENDER_CATEGORY_PALM, 8.2f, 12.4f, 0.82f, 1.22f, 0.22f, 0.58f, 1.45f },
   { "res/obj/Date Palm.obj", PALM_RENDER_CATEGORY_PALM, 8.6f, 12.8f, 0.82f, 1.18f, 0.20f, 0.54f, 1.40f },
+  { "res/low_house_wis_doors_all_in_one.glb", PALM_RENDER_CATEGORY_HOUSE, 11.5f, 18.5f, 0.92f, 1.12f, 0.06f, 0.20f, 0.60f },
+  { "res/chinese_house2.glb", PALM_RENDER_CATEGORY_HOUSE, 15.0f, 24.0f, 0.88f, 1.08f, 0.10f, 0.24f, 0.46f },
   { "res/obj/Tree.obj", PALM_RENDER_CATEGORY_TREE, 9.2f, 14.6f, 0.80f, 1.16f, 0.24f, 0.60f, 1.32f },
   { "res/obj/Trava Kolosok.obj", PALM_RENDER_CATEGORY_GRASS, 0.62f, 1.28f, 0.82f, 1.24f, 0.02f, 0.08f, 1.08f },
   { "res/obj/mountain.obj", PALM_RENDER_CATEGORY_MOUNTAIN, 980.0f, 1720.0f, 0.90f, 1.20f, 140.0f, 380.0f, 12.0f }
 };
+static const size_t k_palm_render_asset_spec_count = sizeof(k_palm_render_asset_specs) / sizeof(k_palm_render_asset_specs[0]);
 
 static void palm_render_show_error(const char* title, const char* message);
 static int palm_render_is_space(char value);
@@ -136,6 +256,7 @@ static int palm_render_build_relative_path(const char* base_path, const char* re
 static int palm_render_resolve_asset_path(const char* relative_path, char* out_path, size_t out_path_size);
 static int palm_render_resolve_material_asset_path(const char* mtl_path, const char* relative_path, char* out_path, size_t out_path_size);
 static int palm_render_load_text_file(const char* path, const char* label, char** out_text);
+static int palm_render_load_binary_file(const char* path, const char* label, unsigned char** out_data, size_t* out_size);
 static char* palm_render_trim_left(char* text);
 static void palm_render_trim_right_in_place(char* text);
 static const char* palm_render_skip_spaces_const(const char* text);
@@ -160,14 +281,55 @@ static PalmVec3 palm_render_vec3_subtract(PalmVec3 a, PalmVec3 b);
 static PalmVec3 palm_render_vec3_cross(PalmVec3 a, PalmVec3 b);
 static float palm_render_vec3_dot(PalmVec3 a, PalmVec3 b);
 static PalmVec3 palm_render_vec3_normalize(PalmVec3 value);
-static int palm_render_load_model_vertices(
-  const char* relative_obj_path,
+static void palm_render_matrix_identity(float* out_matrix);
+static void palm_render_matrix_multiply(float* out_matrix, const float* left, const float* right);
+static void palm_render_matrix_from_trs(float* out_matrix, const PalmVec3* translation, const float* rotation, const PalmVec3* scale);
+static PalmVec3 palm_render_transform_point(const float* matrix, PalmVec3 value);
+static PalmVec3 palm_render_transform_direction(const float* matrix, PalmVec3 value);
+static int palm_render_json_parse(const char* json, size_t length, PalmJsonToken** out_tokens, size_t* out_token_count);
+static size_t palm_render_json_token_span(const PalmJsonToken* tokens, size_t token_count, size_t token_index);
+static int palm_render_json_token_equals(const char* json, const PalmJsonToken* token, const char* expected);
+static int palm_render_json_token_to_int(const char* json, const PalmJsonToken* token, int* out_value);
+static int palm_render_json_token_to_size(const char* json, const PalmJsonToken* token, size_t* out_value);
+static int palm_render_json_token_to_float(const char* json, const PalmJsonToken* token, float* out_value);
+static int palm_render_json_object_get(const char* json, const PalmJsonToken* tokens, size_t token_count, size_t object_index, const char* key);
+static int palm_render_json_array_get(const PalmJsonToken* tokens, size_t token_count, size_t array_index, size_t element_index);
+static int palm_render_gltf_accessor_component_count(const char* type_name);
+static size_t palm_render_gltf_component_size(int component_type);
+static float palm_render_gltf_read_component_as_float(const unsigned char* source, int component_type, int normalized);
+static unsigned int palm_render_gltf_read_index(const unsigned char* source, int component_type);
+static int palm_render_parse_glb_document(const char* relative_asset_path, PalmGltfDocument* out_document);
+static void palm_render_destroy_gltf_document(PalmGltfDocument* document);
+static int palm_render_decode_gltf_image(PalmGltfDocument* document, int image_index);
+static PalmColor palm_render_sample_gltf_material_color(const PalmGltfDocument* document, int material_index, PalmVec2 texcoord);
+static int palm_render_append_gltf_node_vertices(
+  const PalmGltfDocument* document,
+  int node_index,
+  const float* parent_matrix,
+  PalmVertexArray* vertices);
+static int palm_render_load_obj_vertices(
+  const char* relative_asset_path,
   PalmVertex** out_vertices,
   GLsizei* out_vertex_count,
   float* out_model_height,
   float* out_model_radius,
   char* out_diffuse_texture_path,
   size_t out_diffuse_texture_path_size);
+static int palm_render_load_glb_vertices(
+  const char* relative_asset_path,
+  PalmVertex** out_vertices,
+  GLsizei* out_vertex_count,
+  float* out_model_height,
+  float* out_model_radius);
+static int palm_render_load_model_vertices(
+  const char* relative_asset_path,
+  PalmVertex** out_vertices,
+  GLsizei* out_vertex_count,
+  float* out_model_height,
+  float* out_model_radius,
+  char* out_diffuse_texture_path,
+  size_t out_diffuse_texture_path_size);
+static int palm_render_append_category_assets(PalmRenderMesh* mesh, PalmRenderCategory category);
 static int palm_render_create_variant(PalmRenderVariant* variant, const PalmRenderAssetSpec* asset_spec);
 static void palm_render_destroy_variant(PalmRenderVariant* variant);
 static int palm_render_reserve_instances(PalmRenderVariant* variant, size_t required_instance_capacity);
@@ -206,6 +368,12 @@ static int palm_render_populate_palm_instances(
   const CameraState* camera,
   const SceneSettings* settings,
   const RendererQualityProfile* quality);
+static int palm_render_populate_house_instances(
+  PalmRenderMesh* mesh,
+  const CameraState* camera,
+  const SceneSettings* settings,
+  float house_radius,
+  float house_cell_size);
 static int palm_render_populate_tree_instances(
   PalmRenderMesh* mesh,
   const CameraState* camera,
@@ -221,17 +389,41 @@ static int palm_render_populate_mountain_instances(
   const CameraState* camera,
   const SceneSettings* settings,
   const RendererQualityProfile* quality);
+static int palm_render_add_house_instance(
+  PalmRenderMesh* mesh,
+  int grid_x,
+  int grid_z,
+  float x,
+  float z,
+  float distance,
+  const SceneSettings* settings,
+  int* in_out_near_count,
+  int* in_out_far_count);
 static float palm_render_sample_lowest_terrain_ring(float x, float z, float radius, const SceneSettings* settings);
 static void palm_render_build_instance_transform(PalmInstanceData* instance, float x, float y, float z, float scale, float yaw_radians, PalmColor tint);
 
 int palm_render_create(PalmRenderMesh* mesh)
 {
-  return palm_render_create_category(mesh, PALM_RENDER_CATEGORY_PALM);
+  if (mesh == NULL)
+  {
+    return 0;
+  }
+
+  memset(mesh, 0, sizeof(*mesh));
+  if (!palm_render_append_category_assets(mesh, PALM_RENDER_CATEGORY_PALM) ||
+    !palm_render_append_category_assets(mesh, PALM_RENDER_CATEGORY_HOUSE))
+  {
+    palm_render_destroy(mesh);
+    palm_render_show_error("Palm Error", "Failed to load palm and house variants.");
+    return 0;
+  }
+
+  diagnostics_logf("palm_render: category=palm variant_count=%d", mesh->variant_count);
+  return 1;
 }
 
 int palm_render_create_category(PalmRenderMesh* mesh, PalmRenderCategory category)
 {
-  int asset_index = 0;
   const char* category_name = "foliage";
 
   if (mesh == NULL)
@@ -240,18 +432,7 @@ int palm_render_create_category(PalmRenderMesh* mesh, PalmRenderCategory categor
   }
 
   memset(mesh, 0, sizeof(*mesh));
-
-  for (asset_index = 0; asset_index < PALM_RENDER_MAX_VARIANTS; ++asset_index)
-  {
-    if (k_palm_render_asset_specs[asset_index].category != category)
-    {
-      continue;
-    }
-    if (palm_render_create_variant(&mesh->variants[mesh->variant_count], &k_palm_render_asset_specs[asset_index]))
-    {
-      mesh->variant_count += 1;
-    }
-  }
+  (void)palm_render_append_category_assets(mesh, category);
 
   switch (category)
   {
@@ -266,6 +447,9 @@ int palm_render_create_category(PalmRenderMesh* mesh, PalmRenderCategory categor
       break;
     case PALM_RENDER_CATEGORY_MOUNTAIN:
       category_name = "mountain";
+      break;
+    case PALM_RENDER_CATEGORY_HOUSE:
+      category_name = "house";
       break;
     default:
       break;
@@ -282,6 +466,37 @@ int palm_render_create_category(PalmRenderMesh* mesh, PalmRenderCategory categor
   return 1;
 }
 
+static int palm_render_append_category_assets(PalmRenderMesh* mesh, PalmRenderCategory category)
+{
+  size_t asset_index = 0U;
+
+  if (mesh == NULL)
+  {
+    return 0;
+  }
+
+  for (asset_index = 0U; asset_index < k_palm_render_asset_spec_count; ++asset_index)
+  {
+    const PalmRenderAssetSpec* asset_spec = &k_palm_render_asset_specs[asset_index];
+
+    if (asset_spec->category != category)
+    {
+      continue;
+    }
+    if (mesh->variant_count >= PALM_RENDER_MAX_VARIANTS)
+    {
+      palm_render_show_error("Palm Error", "Configured foliage variants exceed PALM_RENDER_MAX_VARIANTS.");
+      return 0;
+    }
+    if (palm_render_create_variant(&mesh->variants[mesh->variant_count], asset_spec))
+    {
+      mesh->variant_count += 1;
+    }
+  }
+
+  return palm_render_has_category(mesh, category);
+}
+
 static int palm_render_create_variant(PalmRenderVariant* variant, const PalmRenderAssetSpec* asset_spec)
 {
   PalmVertex* vertices = NULL;
@@ -291,14 +506,14 @@ static int palm_render_create_variant(PalmRenderVariant* variant, const PalmRend
   char diffuse_texture_path[PLATFORM_PATH_MAX] = { 0 };
   int column = 0;
 
-  if (variant == NULL || asset_spec == NULL || asset_spec->relative_obj_path == NULL)
+  if (variant == NULL || asset_spec == NULL || asset_spec->relative_asset_path == NULL)
   {
     return 0;
   }
 
   memset(variant, 0, sizeof(*variant));
   if (!palm_render_load_model_vertices(
-    asset_spec->relative_obj_path,
+    asset_spec->relative_asset_path,
     &vertices,
     &vertex_count,
     &model_height,
@@ -338,14 +553,14 @@ static int palm_render_create_variant(PalmRenderVariant* variant, const PalmRend
       diagnostics_logf(
         "palm_render: failed to load diffuse texture '%s' for %s, using solid fallback",
         diffuse_texture_path,
-        asset_spec->relative_obj_path);
+        asset_spec->relative_asset_path);
     }
     else
     {
       diagnostics_logf(
         "palm_render: using diffuse texture '%s' for %s",
         diffuse_texture_path,
-        asset_spec->relative_obj_path);
+        asset_spec->relative_asset_path);
     }
   }
   if (variant->diffuse_texture == 0U &&
@@ -835,6 +1050,78 @@ static int palm_render_load_text_file(const char* path, const char* label, char*
 
   text[file_size] = '\0';
   *out_text = text;
+  return 1;
+}
+
+static int palm_render_load_binary_file(const char* path, const char* label, unsigned char** out_data, size_t* out_size)
+{
+  char message[256] = { 0 };
+  FILE* file = NULL;
+  long file_size = 0L;
+  size_t bytes_read = 0U;
+  unsigned char* data = NULL;
+
+  if (out_data == NULL || out_size == NULL)
+  {
+    return 0;
+  }
+
+  *out_data = NULL;
+  *out_size = 0U;
+
+  #if defined(_MSC_VER)
+  if (fopen_s(&file, path, "rb") != 0)
+  {
+    file = NULL;
+  }
+  #else
+  file = fopen(path, "rb");
+  #endif
+
+  if (file == NULL)
+  {
+    (void)snprintf(message, sizeof(message), "Failed to open %s file:\n%s", label, path);
+    palm_render_show_error("File Error", message);
+    return 0;
+  }
+
+  if (fseek(file, 0L, SEEK_END) != 0)
+  {
+    (void)snprintf(message, sizeof(message), "Failed to seek %s file.", label);
+    palm_render_show_error("File Error", message);
+    fclose(file);
+    return 0;
+  }
+
+  file_size = ftell(file);
+  if (file_size <= 0L || fseek(file, 0L, SEEK_SET) != 0)
+  {
+    (void)snprintf(message, sizeof(message), "%s file is unreadable.", label);
+    palm_render_show_error("File Error", message);
+    fclose(file);
+    return 0;
+  }
+
+  data = (unsigned char*)malloc((size_t)file_size);
+  if (data == NULL)
+  {
+    palm_render_show_error("Memory Error", "Failed to allocate memory for binary palm asset loading.");
+    fclose(file);
+    return 0;
+  }
+
+  bytes_read = fread(data, 1U, (size_t)file_size, file);
+  fclose(file);
+  if (bytes_read != (size_t)file_size)
+  {
+    free(data);
+    (void)snprintf(message, sizeof(message), "Failed to read %s file.", label);
+    palm_render_show_error("File Error", message);
+    return 0;
+  }
+
+  *out_data = data;
+  *out_size = (size_t)file_size;
   return 1;
 }
 
@@ -1456,8 +1743,638 @@ static PalmVec3 palm_render_vec3_normalize(PalmVec3 value)
   }
 }
 
-static int palm_render_load_model_vertices(
-  const char* relative_obj_path,
+static void palm_render_matrix_identity(float* out_matrix)
+{
+  size_t i = 0U;
+
+  if (out_matrix == NULL)
+  {
+    return;
+  }
+
+  for (i = 0U; i < 16U; ++i)
+  {
+    out_matrix[i] = 0.0f;
+  }
+  out_matrix[0] = 1.0f;
+  out_matrix[5] = 1.0f;
+  out_matrix[10] = 1.0f;
+  out_matrix[15] = 1.0f;
+}
+
+static void palm_render_matrix_multiply(float* out_matrix, const float* left, const float* right)
+{
+  float result[16] = { 0 };
+  int column = 0;
+  int row = 0;
+  int inner = 0;
+
+  if (out_matrix == NULL || left == NULL || right == NULL)
+  {
+    return;
+  }
+
+  for (column = 0; column < 4; ++column)
+  {
+    for (row = 0; row < 4; ++row)
+    {
+      float value = 0.0f;
+      for (inner = 0; inner < 4; ++inner)
+      {
+        value += left[inner * 4 + row] * right[column * 4 + inner];
+      }
+      result[column * 4 + row] = value;
+    }
+  }
+
+  memcpy(out_matrix, result, sizeof(result));
+}
+
+static void palm_render_matrix_from_trs(float* out_matrix, const PalmVec3* translation, const float* rotation, const PalmVec3* scale)
+{
+  const PalmVec3 t = (translation != NULL) ? *translation : (PalmVec3){ 0.0f, 0.0f, 0.0f };
+  const PalmVec3 s = (scale != NULL) ? *scale : (PalmVec3){ 1.0f, 1.0f, 1.0f };
+  const float qx = (rotation != NULL) ? rotation[0] : 0.0f;
+  const float qy = (rotation != NULL) ? rotation[1] : 0.0f;
+  const float qz = (rotation != NULL) ? rotation[2] : 0.0f;
+  const float qw = (rotation != NULL) ? rotation[3] : 1.0f;
+  const float xx = qx * qx;
+  const float yy = qy * qy;
+  const float zz = qz * qz;
+  const float xy = qx * qy;
+  const float xz = qx * qz;
+  const float yz = qy * qz;
+  const float wx = qw * qx;
+  const float wy = qw * qy;
+  const float wz = qw * qz;
+
+  if (out_matrix == NULL)
+  {
+    return;
+  }
+
+  palm_render_matrix_identity(out_matrix);
+  out_matrix[0] = (1.0f - 2.0f * (yy + zz)) * s.x;
+  out_matrix[1] = (2.0f * (xy + wz)) * s.x;
+  out_matrix[2] = (2.0f * (xz - wy)) * s.x;
+  out_matrix[4] = (2.0f * (xy - wz)) * s.y;
+  out_matrix[5] = (1.0f - 2.0f * (xx + zz)) * s.y;
+  out_matrix[6] = (2.0f * (yz + wx)) * s.y;
+  out_matrix[8] = (2.0f * (xz + wy)) * s.z;
+  out_matrix[9] = (2.0f * (yz - wx)) * s.z;
+  out_matrix[10] = (1.0f - 2.0f * (xx + yy)) * s.z;
+  out_matrix[12] = t.x;
+  out_matrix[13] = t.y;
+  out_matrix[14] = t.z;
+}
+
+static PalmVec3 palm_render_transform_point(const float* matrix, PalmVec3 value)
+{
+  PalmVec3 result = value;
+
+  if (matrix == NULL)
+  {
+    return result;
+  }
+
+  result.x = matrix[0] * value.x + matrix[4] * value.y + matrix[8] * value.z + matrix[12];
+  result.y = matrix[1] * value.x + matrix[5] * value.y + matrix[9] * value.z + matrix[13];
+  result.z = matrix[2] * value.x + matrix[6] * value.y + matrix[10] * value.z + matrix[14];
+  return result;
+}
+
+static PalmVec3 palm_render_transform_direction(const float* matrix, PalmVec3 value)
+{
+  PalmVec3 result = value;
+
+  if (matrix == NULL)
+  {
+    return result;
+  }
+
+  result.x = matrix[0] * value.x + matrix[4] * value.y + matrix[8] * value.z;
+  result.y = matrix[1] * value.x + matrix[5] * value.y + matrix[9] * value.z;
+  result.z = matrix[2] * value.x + matrix[6] * value.y + matrix[10] * value.z;
+  return palm_render_vec3_normalize(result);
+}
+
+static PalmJsonToken* palm_render_json_alloc_token(PalmJsonParser* parser, PalmJsonToken* tokens, size_t token_capacity)
+{
+  PalmJsonToken* token = NULL;
+
+  if (parser == NULL || tokens == NULL || parser->next_token >= token_capacity)
+  {
+    return NULL;
+  }
+
+  token = &tokens[parser->next_token];
+  parser->next_token += 1U;
+  token->type = PALM_JSON_UNDEFINED;
+  token->start = -1;
+  token->end = -1;
+  token->size = 0;
+  token->parent = -1;
+  return token;
+}
+
+static int palm_render_json_parse_string(PalmJsonParser* parser, const char* json, size_t length, PalmJsonToken* tokens, size_t token_capacity)
+{
+  unsigned int start = 0U;
+  PalmJsonToken* token = NULL;
+
+  if (parser == NULL || json == NULL || parser->position >= length || json[parser->position] != '"')
+  {
+    return 0;
+  }
+
+  start = parser->position + 1U;
+  parser->position += 1U;
+  while (parser->position < length)
+  {
+    const char current = json[parser->position];
+    if (current == '"')
+    {
+      token = palm_render_json_alloc_token(parser, tokens, token_capacity);
+      if (token == NULL)
+      {
+        return -1;
+      }
+      token->type = PALM_JSON_STRING;
+      token->start = (int)start;
+      token->end = (int)parser->position;
+      token->parent = parser->parent_token;
+      if (parser->parent_token >= 0)
+      {
+        tokens[parser->parent_token].size += 1;
+      }
+      return 1;
+    }
+    if (current == '\\')
+    {
+      parser->position += 1U;
+      if (parser->position >= length)
+      {
+        return 0;
+      }
+    }
+    parser->position += 1U;
+  }
+
+  return 0;
+}
+
+static int palm_render_json_parse_primitive(PalmJsonParser* parser, const char* json, size_t length, PalmJsonToken* tokens, size_t token_capacity)
+{
+  unsigned int start = parser->position;
+  PalmJsonToken* token = NULL;
+
+  if (parser == NULL || json == NULL)
+  {
+    return 0;
+  }
+
+  while (parser->position < length)
+  {
+    const char current = json[parser->position];
+    if (current == '\t' || current == '\r' || current == '\n' || current == ' ' ||
+      current == ',' || current == ']' || current == '}' || current == ':')
+    {
+      break;
+    }
+    parser->position += 1U;
+  }
+
+  if (parser->position <= start)
+  {
+    return 0;
+  }
+
+  token = palm_render_json_alloc_token(parser, tokens, token_capacity);
+  if (token == NULL)
+  {
+    return -1;
+  }
+  token->type = PALM_JSON_PRIMITIVE;
+  token->start = (int)start;
+  token->end = (int)parser->position;
+  token->parent = parser->parent_token;
+  if (parser->parent_token >= 0)
+  {
+    tokens[parser->parent_token].size += 1;
+  }
+  parser->position -= 1U;
+  return 1;
+}
+
+static int palm_render_json_parse(const char* json, size_t length, PalmJsonToken** out_tokens, size_t* out_token_count)
+{
+  size_t token_capacity = 512U;
+  PalmJsonToken* tokens = NULL;
+  int parse_ok = 0;
+
+  if (json == NULL || out_tokens == NULL || out_token_count == NULL)
+  {
+    return 0;
+  }
+
+  *out_tokens = NULL;
+  *out_token_count = 0U;
+
+  while (token_capacity <= 262144U)
+  {
+    PalmJsonParser parser = { 0 };
+    tokens = (PalmJsonToken*)malloc(sizeof(PalmJsonToken) * token_capacity);
+    if (tokens == NULL)
+    {
+      palm_render_show_error("Memory Error", "Failed to allocate GLB JSON tokens.");
+      return 0;
+    }
+    memset(tokens, 0, sizeof(PalmJsonToken) * token_capacity);
+    parser.position = 0U;
+    parser.next_token = 0U;
+    parser.parent_token = -1;
+
+    while (parser.position < length)
+    {
+      const char current = json[parser.position];
+
+      switch (current)
+      {
+        case '{':
+        case '[':
+        {
+          PalmJsonToken* token = palm_render_json_alloc_token(&parser, tokens, token_capacity);
+          if (token == NULL)
+          {
+            parse_ok = -1;
+            break;
+          }
+          token->type = (current == '{') ? PALM_JSON_OBJECT : PALM_JSON_ARRAY;
+          token->start = (int)parser.position;
+          token->parent = parser.parent_token;
+          if (parser.parent_token >= 0)
+          {
+            tokens[parser.parent_token].size += 1;
+          }
+          parser.parent_token = (int)(parser.next_token - 1U);
+          break;
+        }
+        case '}':
+        case ']':
+        {
+          int token_index = (int)parser.next_token - 1;
+          const PalmJsonType expected_type = (current == '}') ? PALM_JSON_OBJECT : PALM_JSON_ARRAY;
+          while (token_index >= 0)
+          {
+            if (tokens[token_index].start >= 0 && tokens[token_index].end < 0)
+            {
+              if (tokens[token_index].type != expected_type)
+              {
+                free(tokens);
+                return 0;
+              }
+              tokens[token_index].end = (int)parser.position + 1;
+              parser.parent_token = tokens[token_index].parent;
+              break;
+            }
+            token_index -= 1;
+          }
+          if (token_index < 0)
+          {
+            free(tokens);
+            return 0;
+          }
+          break;
+        }
+        case '"':
+          parse_ok = palm_render_json_parse_string(&parser, json, length, tokens, token_capacity);
+          if (parse_ok <= 0)
+          {
+            break;
+          }
+          break;
+        case '\t':
+        case '\r':
+        case '\n':
+        case ' ':
+        case ':':
+        case ',':
+          break;
+        default:
+          parse_ok = palm_render_json_parse_primitive(&parser, json, length, tokens, token_capacity);
+          if (parse_ok <= 0)
+          {
+            break;
+          }
+          break;
+      }
+
+      if (parse_ok < 0)
+      {
+        break;
+      }
+      parser.position += 1U;
+    }
+
+    if (parse_ok >= 0 && parser.next_token > 0U)
+    {
+      size_t token_index = 0U;
+      int valid = 1;
+      for (token_index = 0U; token_index < parser.next_token; ++token_index)
+      {
+        if (tokens[token_index].start < 0 || tokens[token_index].end < 0)
+        {
+          valid = 0;
+          break;
+        }
+      }
+      if (valid)
+      {
+        *out_tokens = tokens;
+        *out_token_count = parser.next_token;
+        return 1;
+      }
+    }
+
+    free(tokens);
+    token_capacity *= 2U;
+  }
+
+  palm_render_show_error("GLB Error", "Failed to parse GLB JSON chunk.");
+  return 0;
+}
+
+static size_t palm_render_json_token_span(const PalmJsonToken* tokens, size_t token_count, size_t token_index)
+{
+  size_t span = 1U;
+  size_t child_index = token_index + 1U;
+  int child = 0;
+
+  if (tokens == NULL || token_index >= token_count)
+  {
+    return 0U;
+  }
+  if (tokens[token_index].type != PALM_JSON_OBJECT && tokens[token_index].type != PALM_JSON_ARRAY)
+  {
+    return 1U;
+  }
+
+  for (child = 0; child < tokens[token_index].size && child_index < token_count; ++child)
+  {
+    const size_t child_span = palm_render_json_token_span(tokens, token_count, child_index);
+    span += child_span;
+    child_index += child_span;
+  }
+  return span;
+}
+
+static int palm_render_json_token_equals(const char* json, const PalmJsonToken* token, const char* expected)
+{
+  size_t expected_length = 0U;
+  size_t token_length = 0U;
+
+  if (json == NULL || token == NULL || expected == NULL || token->start < 0 || token->end < token->start)
+  {
+    return 0;
+  }
+
+  expected_length = strlen(expected);
+  token_length = (size_t)(token->end - token->start);
+  return token_length == expected_length && strncmp(json + token->start, expected, token_length) == 0;
+}
+
+static int palm_render_json_token_to_int(const char* json, const PalmJsonToken* token, int* out_value)
+{
+  char buffer[64] = { 0 };
+  size_t length = 0U;
+  char* end = NULL;
+  long value = 0L;
+
+  if (json == NULL || token == NULL || out_value == NULL || token->start < 0 || token->end < token->start)
+  {
+    return 0;
+  }
+
+  length = (size_t)(token->end - token->start);
+  if (length == 0U || length >= sizeof(buffer))
+  {
+    return 0;
+  }
+
+  memcpy(buffer, json + token->start, length);
+  buffer[length] = '\0';
+  value = strtol(buffer, &end, 10);
+  if (end == buffer)
+  {
+    return 0;
+  }
+  *out_value = (int)value;
+  return 1;
+}
+
+static int palm_render_json_token_to_size(const char* json, const PalmJsonToken* token, size_t* out_value)
+{
+  int int_value = 0;
+
+  if (!palm_render_json_token_to_int(json, token, &int_value) || int_value < 0)
+  {
+    return 0;
+  }
+
+  *out_value = (size_t)int_value;
+  return 1;
+}
+
+static int palm_render_json_token_to_float(const char* json, const PalmJsonToken* token, float* out_value)
+{
+  char buffer[64] = { 0 };
+  size_t length = 0U;
+  char* end = NULL;
+  float value = 0.0f;
+
+  if (json == NULL || token == NULL || out_value == NULL || token->start < 0 || token->end < token->start)
+  {
+    return 0;
+  }
+
+  length = (size_t)(token->end - token->start);
+  if (length == 0U || length >= sizeof(buffer))
+  {
+    return 0;
+  }
+
+  memcpy(buffer, json + token->start, length);
+  buffer[length] = '\0';
+  value = strtof(buffer, &end);
+  if (end == buffer)
+  {
+    return 0;
+  }
+  *out_value = value;
+  return 1;
+}
+
+static int palm_render_json_object_get(const char* json, const PalmJsonToken* tokens, size_t token_count, size_t object_index, const char* key)
+{
+  size_t token_index = object_index + 1U;
+
+  if (json == NULL || tokens == NULL || key == NULL || object_index >= token_count || tokens[object_index].type != PALM_JSON_OBJECT)
+  {
+    return -1;
+  }
+
+  while (token_index < token_count && token_index < object_index + palm_render_json_token_span(tokens, token_count, object_index))
+  {
+    if (tokens[token_index].parent == (int)object_index)
+    {
+      const size_t key_index = token_index;
+      const size_t value_index = key_index + 1U;
+      if (value_index < token_count &&
+        tokens[value_index].parent == (int)object_index &&
+        palm_render_json_token_equals(json, &tokens[key_index], key))
+      {
+        return (int)value_index;
+      }
+      token_index = value_index + palm_render_json_token_span(tokens, token_count, value_index);
+      continue;
+    }
+    token_index += 1U;
+  }
+
+  return -1;
+}
+
+static int palm_render_json_array_get(const PalmJsonToken* tokens, size_t token_count, size_t array_index, size_t element_index)
+{
+  size_t token_index = array_index + 1U;
+  size_t current_index = 0U;
+
+  if (tokens == NULL || array_index >= token_count || tokens[array_index].type != PALM_JSON_ARRAY)
+  {
+    return -1;
+  }
+
+  while (token_index < token_count && token_index < array_index + palm_render_json_token_span(tokens, token_count, array_index))
+  {
+    if (tokens[token_index].parent == (int)array_index)
+    {
+      if (current_index == element_index)
+      {
+        return (int)token_index;
+      }
+      current_index += 1U;
+      token_index += palm_render_json_token_span(tokens, token_count, token_index);
+      continue;
+    }
+    token_index += 1U;
+  }
+
+  return -1;
+}
+
+static int palm_render_gltf_accessor_component_count(const char* type_name)
+{
+  if (type_name == NULL)
+  {
+    return 0;
+  }
+  if (strcmp(type_name, "SCALAR") == 0)
+  {
+    return 1;
+  }
+  if (strcmp(type_name, "VEC2") == 0)
+  {
+    return 2;
+  }
+  if (strcmp(type_name, "VEC3") == 0)
+  {
+    return 3;
+  }
+  if (strcmp(type_name, "VEC4") == 0)
+  {
+    return 4;
+  }
+  return 0;
+}
+
+static size_t palm_render_gltf_component_size(int component_type)
+{
+  switch (component_type)
+  {
+    case 5120:
+    case 5121:
+      return 1U;
+    case 5122:
+    case 5123:
+      return 2U;
+    case 5125:
+    case 5126:
+      return 4U;
+    default:
+      return 0U;
+  }
+}
+
+static float palm_render_gltf_read_component_as_float(const unsigned char* source, int component_type, int normalized)
+{
+  if (source == NULL)
+  {
+    return 0.0f;
+  }
+
+  switch (component_type)
+  {
+    case 5120:
+    {
+      const int8_t value = *(const int8_t*)source;
+      return normalized ? palm_render_clamp((float)value / 127.0f, -1.0f, 1.0f) : (float)value;
+    }
+    case 5121:
+    {
+      const uint8_t value = *(const uint8_t*)source;
+      return normalized ? (float)value / 255.0f : (float)value;
+    }
+    case 5122:
+    {
+      const int16_t value = *(const int16_t*)source;
+      return normalized ? palm_render_clamp((float)value / 32767.0f, -1.0f, 1.0f) : (float)value;
+    }
+    case 5123:
+    {
+      const uint16_t value = *(const uint16_t*)source;
+      return normalized ? (float)value / 65535.0f : (float)value;
+    }
+    case 5125:
+      return (float)(*(const uint32_t*)source);
+    case 5126:
+      return *(const float*)source;
+    default:
+      return 0.0f;
+  }
+}
+
+static unsigned int palm_render_gltf_read_index(const unsigned char* source, int component_type)
+{
+  if (source == NULL)
+  {
+    return 0U;
+  }
+
+  switch (component_type)
+  {
+    case 5121:
+      return (unsigned int)(*(const uint8_t*)source);
+    case 5123:
+      return (unsigned int)(*(const uint16_t*)source);
+    case 5125:
+      return *(const uint32_t*)source;
+    default:
+      return 0U;
+  }
+}
+
+static int palm_render_load_obj_vertices(
+  const char* relative_asset_path,
   PalmVertex** out_vertices,
   GLsizei* out_vertex_count,
   float* out_model_height,
@@ -1483,7 +2400,7 @@ static int palm_render_load_model_vertices(
   size_t base_count = 0U;
   size_t i = 0U;
 
-  if (relative_obj_path == NULL || out_vertices == NULL || out_vertex_count == NULL || out_model_height == NULL || out_model_radius == NULL)
+  if (relative_asset_path == NULL || out_vertices == NULL || out_vertex_count == NULL || out_model_height == NULL || out_model_radius == NULL)
   {
     return 0;
   }
@@ -1496,7 +2413,7 @@ static int palm_render_load_model_vertices(
     out_diffuse_texture_path[0] = '\0';
   }
 
-  if (!palm_render_resolve_asset_path(relative_obj_path, obj_path, sizeof(obj_path)) ||
+  if (!palm_render_resolve_asset_path(relative_asset_path, obj_path, sizeof(obj_path)) ||
     !palm_render_load_text_file(obj_path, "OBJ", &source))
   {
     return 0;
@@ -1865,6 +2782,1230 @@ static int palm_render_load_model_vertices(
   return 1;
 }
 
+static int palm_render_parse_glb_document(const char* relative_asset_path, PalmGltfDocument* out_document)
+{
+  char asset_path[PLATFORM_PATH_MAX] = { 0 };
+  unsigned char* data = NULL;
+  size_t data_size = 0U;
+  const unsigned char* json_chunk = NULL;
+  size_t json_chunk_size = 0U;
+  const unsigned char* binary_chunk = NULL;
+  size_t binary_chunk_size = 0U;
+  char* json_text = NULL;
+  PalmJsonToken* tokens = NULL;
+  size_t token_count = 0U;
+  size_t offset = 12U;
+  int root_index = 0;
+  int default_scene = 0;
+  int value_index = -1;
+  size_t i = 0U;
+
+  if (relative_asset_path == NULL || out_document == NULL)
+  {
+    return 0;
+  }
+
+  memset(out_document, 0, sizeof(*out_document));
+  if (!palm_render_resolve_asset_path(relative_asset_path, asset_path, sizeof(asset_path)) ||
+    !palm_render_load_binary_file(asset_path, "GLB", &data, &data_size))
+  {
+    return 0;
+  }
+
+  {
+    uint32_t version = 0U;
+    if (data_size < 20U || memcmp(data, "glTF", 4U) != 0)
+    {
+      free(data);
+      palm_render_show_error("GLB Error", "GLB header is invalid or unsupported.");
+      return 0;
+    }
+    memcpy(&version, data + 4U, sizeof(version));
+    if (version != 2U)
+    {
+      free(data);
+      palm_render_show_error("GLB Error", "GLB header is invalid or unsupported.");
+      return 0;
+    }
+  }
+
+  while (offset + 8U <= data_size)
+  {
+    uint32_t chunk_length = 0U;
+    uint32_t chunk_type = 0U;
+    memcpy(&chunk_length, data + offset, sizeof(chunk_length));
+    memcpy(&chunk_type, data + offset + 4U, sizeof(chunk_type));
+    offset += 8U;
+    if (offset + chunk_length > data_size)
+    {
+      free(data);
+      palm_render_show_error("GLB Error", "GLB chunk extends past the end of the file.");
+      return 0;
+    }
+
+    if (chunk_type == 0x4E4F534AU)
+    {
+      json_chunk = data + offset;
+      json_chunk_size = (size_t)chunk_length;
+    }
+    else if (chunk_type == 0x004E4942U)
+    {
+      binary_chunk = data + offset;
+      binary_chunk_size = (size_t)chunk_length;
+    }
+    offset += (size_t)chunk_length;
+  }
+
+  if (json_chunk == NULL || json_chunk_size == 0U || binary_chunk == NULL || binary_chunk_size == 0U)
+  {
+    free(data);
+    palm_render_show_error("GLB Error", "GLB file is missing JSON or BIN chunks.");
+    return 0;
+  }
+
+  json_text = (char*)malloc(json_chunk_size + 1U);
+  if (json_text == NULL)
+  {
+    free(data);
+    palm_render_show_error("Memory Error", "Failed to allocate memory for GLB JSON.");
+    return 0;
+  }
+  memcpy(json_text, json_chunk, json_chunk_size);
+  json_text[json_chunk_size] = '\0';
+
+  if (!palm_render_json_parse(json_text, json_chunk_size, &tokens, &token_count) ||
+    token_count == 0U ||
+    tokens[0].type != PALM_JSON_OBJECT)
+  {
+    free(json_text);
+    free(tokens);
+    free(data);
+    return 0;
+  }
+
+  root_index = 0;
+  out_document->owned_data = data;
+  out_document->binary_chunk = binary_chunk;
+  out_document->binary_chunk_size = binary_chunk_size;
+
+  value_index = palm_render_json_object_get(json_text, tokens, token_count, (size_t)root_index, "bufferViews");
+  if (value_index >= 0 && tokens[value_index].type == PALM_JSON_ARRAY)
+  {
+    out_document->buffer_view_count = (size_t)tokens[value_index].size;
+    out_document->buffer_views = (PalmGltfBufferView*)calloc(out_document->buffer_view_count, sizeof(PalmGltfBufferView));
+    if (out_document->buffer_view_count > 0U && out_document->buffer_views == NULL)
+    {
+      palm_render_destroy_gltf_document(out_document);
+      free(json_text);
+      free(tokens);
+      palm_render_show_error("Memory Error", "Failed to allocate GLB buffer views.");
+      return 0;
+    }
+
+    for (i = 0U; i < out_document->buffer_view_count; ++i)
+    {
+      const int view_index = palm_render_json_array_get(tokens, token_count, (size_t)value_index, i);
+      int member_index = -1;
+
+      if (view_index < 0 || tokens[view_index].type != PALM_JSON_OBJECT)
+      {
+        continue;
+      }
+
+      member_index = palm_render_json_object_get(json_text, tokens, token_count, (size_t)view_index, "byteOffset");
+      if (member_index >= 0)
+      {
+        (void)palm_render_json_token_to_size(json_text, &tokens[member_index], &out_document->buffer_views[i].byte_offset);
+      }
+      member_index = palm_render_json_object_get(json_text, tokens, token_count, (size_t)view_index, "byteLength");
+      if (member_index >= 0)
+      {
+        (void)palm_render_json_token_to_size(json_text, &tokens[member_index], &out_document->buffer_views[i].byte_length);
+      }
+      member_index = palm_render_json_object_get(json_text, tokens, token_count, (size_t)view_index, "byteStride");
+      if (member_index >= 0)
+      {
+        (void)palm_render_json_token_to_size(json_text, &tokens[member_index], &out_document->buffer_views[i].byte_stride);
+      }
+    }
+  }
+
+  value_index = palm_render_json_object_get(json_text, tokens, token_count, (size_t)root_index, "accessors");
+  if (value_index >= 0 && tokens[value_index].type == PALM_JSON_ARRAY)
+  {
+    out_document->accessor_count = (size_t)tokens[value_index].size;
+    out_document->accessors = (PalmGltfAccessor*)calloc(out_document->accessor_count, sizeof(PalmGltfAccessor));
+    if (out_document->accessor_count > 0U && out_document->accessors == NULL)
+    {
+      palm_render_destroy_gltf_document(out_document);
+      free(json_text);
+      free(tokens);
+      palm_render_show_error("Memory Error", "Failed to allocate GLB accessors.");
+      return 0;
+    }
+
+    for (i = 0U; i < out_document->accessor_count; ++i)
+    {
+      const int accessor_index = palm_render_json_array_get(tokens, token_count, (size_t)value_index, i);
+      int member_index = -1;
+
+      out_document->accessors[i].buffer_view_index = -1;
+      if (accessor_index < 0 || tokens[accessor_index].type != PALM_JSON_OBJECT)
+      {
+        continue;
+      }
+
+      member_index = palm_render_json_object_get(json_text, tokens, token_count, (size_t)accessor_index, "bufferView");
+      if (member_index >= 0)
+      {
+        (void)palm_render_json_token_to_int(json_text, &tokens[member_index], &out_document->accessors[i].buffer_view_index);
+      }
+      member_index = palm_render_json_object_get(json_text, tokens, token_count, (size_t)accessor_index, "byteOffset");
+      if (member_index >= 0)
+      {
+        (void)palm_render_json_token_to_size(json_text, &tokens[member_index], &out_document->accessors[i].byte_offset);
+      }
+      member_index = palm_render_json_object_get(json_text, tokens, token_count, (size_t)accessor_index, "count");
+      if (member_index >= 0)
+      {
+        (void)palm_render_json_token_to_size(json_text, &tokens[member_index], &out_document->accessors[i].count);
+      }
+      member_index = palm_render_json_object_get(json_text, tokens, token_count, (size_t)accessor_index, "componentType");
+      if (member_index >= 0)
+      {
+        (void)palm_render_json_token_to_int(json_text, &tokens[member_index], &out_document->accessors[i].component_type);
+      }
+      member_index = palm_render_json_object_get(json_text, tokens, token_count, (size_t)accessor_index, "normalized");
+      if (member_index >= 0)
+      {
+        out_document->accessors[i].normalized = palm_render_json_token_equals(json_text, &tokens[member_index], "true");
+      }
+      member_index = palm_render_json_object_get(json_text, tokens, token_count, (size_t)accessor_index, "type");
+      if (member_index >= 0)
+      {
+        char type_name[16] = { 0 };
+        const size_t type_length = (size_t)(tokens[member_index].end - tokens[member_index].start);
+        if (type_length > 0U && type_length < sizeof(type_name))
+        {
+          memcpy(type_name, json_text + tokens[member_index].start, type_length);
+          type_name[type_length] = '\0';
+          out_document->accessors[i].component_count = palm_render_gltf_accessor_component_count(type_name);
+        }
+      }
+    }
+  }
+
+  value_index = palm_render_json_object_get(json_text, tokens, token_count, (size_t)root_index, "textures");
+  if (value_index >= 0 && tokens[value_index].type == PALM_JSON_ARRAY)
+  {
+    out_document->texture_count = (size_t)tokens[value_index].size;
+    out_document->textures = (PalmGltfTexture*)calloc(out_document->texture_count, sizeof(PalmGltfTexture));
+    if (out_document->texture_count > 0U && out_document->textures == NULL)
+    {
+      palm_render_destroy_gltf_document(out_document);
+      free(json_text);
+      free(tokens);
+      palm_render_show_error("Memory Error", "Failed to allocate GLB textures.");
+      return 0;
+    }
+
+    for (i = 0U; i < out_document->texture_count; ++i)
+    {
+      const int texture_index = palm_render_json_array_get(tokens, token_count, (size_t)value_index, i);
+      int member_index = -1;
+
+      out_document->textures[i].image_index = -1;
+      if (texture_index < 0 || tokens[texture_index].type != PALM_JSON_OBJECT)
+      {
+        continue;
+      }
+      member_index = palm_render_json_object_get(json_text, tokens, token_count, (size_t)texture_index, "source");
+      if (member_index >= 0)
+      {
+        (void)palm_render_json_token_to_int(json_text, &tokens[member_index], &out_document->textures[i].image_index);
+      }
+    }
+  }
+
+  value_index = palm_render_json_object_get(json_text, tokens, token_count, (size_t)root_index, "materials");
+  if (value_index >= 0 && tokens[value_index].type == PALM_JSON_ARRAY)
+  {
+    out_document->material_count = (size_t)tokens[value_index].size;
+    out_document->materials = (PalmGltfMaterial*)calloc(out_document->material_count, sizeof(PalmGltfMaterial));
+    if (out_document->material_count > 0U && out_document->materials == NULL)
+    {
+      palm_render_destroy_gltf_document(out_document);
+      free(json_text);
+      free(tokens);
+      palm_render_show_error("Memory Error", "Failed to allocate GLB materials.");
+      return 0;
+    }
+
+    for (i = 0U; i < out_document->material_count; ++i)
+    {
+      const int material_index = palm_render_json_array_get(tokens, token_count, (size_t)value_index, i);
+      int member_index = -1;
+      PalmGltfMaterial material = { { 1.0f, 1.0f, 1.0f }, 1, -1 };
+
+      if (material_index < 0 || tokens[material_index].type != PALM_JSON_OBJECT)
+      {
+        out_document->materials[i] = material;
+        continue;
+      }
+
+      member_index = palm_render_json_object_get(json_text, tokens, token_count, (size_t)material_index, "pbrMetallicRoughness");
+      if (member_index >= 0 && tokens[member_index].type == PALM_JSON_OBJECT)
+      {
+        int nested_index = palm_render_json_object_get(json_text, tokens, token_count, (size_t)member_index, "baseColorFactor");
+        if (nested_index >= 0 && tokens[nested_index].type == PALM_JSON_ARRAY)
+        {
+          int component_index = palm_render_json_array_get(tokens, token_count, (size_t)nested_index, 0U);
+          if (component_index >= 0)
+          {
+            (void)palm_render_json_token_to_float(json_text, &tokens[component_index], &material.base_color.r);
+          }
+          component_index = palm_render_json_array_get(tokens, token_count, (size_t)nested_index, 1U);
+          if (component_index >= 0)
+          {
+            (void)palm_render_json_token_to_float(json_text, &tokens[component_index], &material.base_color.g);
+          }
+          component_index = palm_render_json_array_get(tokens, token_count, (size_t)nested_index, 2U);
+          if (component_index >= 0)
+          {
+            (void)palm_render_json_token_to_float(json_text, &tokens[component_index], &material.base_color.b);
+          }
+        }
+        nested_index = palm_render_json_object_get(json_text, tokens, token_count, (size_t)member_index, "baseColorTexture");
+        if (nested_index >= 0 && tokens[nested_index].type == PALM_JSON_OBJECT)
+        {
+          const int texture_member = palm_render_json_object_get(json_text, tokens, token_count, (size_t)nested_index, "index");
+          if (texture_member >= 0)
+          {
+            (void)palm_render_json_token_to_int(json_text, &tokens[texture_member], &material.base_color_texture_index);
+          }
+        }
+      }
+
+      member_index = palm_render_json_object_get(json_text, tokens, token_count, (size_t)material_index, "extensions");
+      if (member_index >= 0 && tokens[member_index].type == PALM_JSON_OBJECT)
+      {
+        const int extension_index = palm_render_json_object_get(
+          json_text,
+          tokens,
+          token_count,
+          (size_t)member_index,
+          "KHR_materials_pbrSpecularGlossiness");
+        if (extension_index >= 0 && tokens[extension_index].type == PALM_JSON_OBJECT)
+        {
+          int nested_index = palm_render_json_object_get(json_text, tokens, token_count, (size_t)extension_index, "diffuseFactor");
+          if (nested_index >= 0 && tokens[nested_index].type == PALM_JSON_ARRAY)
+          {
+            int component_index = palm_render_json_array_get(tokens, token_count, (size_t)nested_index, 0U);
+            if (component_index >= 0)
+            {
+              (void)palm_render_json_token_to_float(json_text, &tokens[component_index], &material.base_color.r);
+            }
+            component_index = palm_render_json_array_get(tokens, token_count, (size_t)nested_index, 1U);
+            if (component_index >= 0)
+            {
+              (void)palm_render_json_token_to_float(json_text, &tokens[component_index], &material.base_color.g);
+            }
+            component_index = palm_render_json_array_get(tokens, token_count, (size_t)nested_index, 2U);
+            if (component_index >= 0)
+            {
+              (void)palm_render_json_token_to_float(json_text, &tokens[component_index], &material.base_color.b);
+            }
+          }
+          nested_index = palm_render_json_object_get(json_text, tokens, token_count, (size_t)extension_index, "diffuseTexture");
+          if (nested_index >= 0 && tokens[nested_index].type == PALM_JSON_OBJECT)
+          {
+            const int texture_member = palm_render_json_object_get(json_text, tokens, token_count, (size_t)nested_index, "index");
+            if (texture_member >= 0)
+            {
+              (void)palm_render_json_token_to_int(json_text, &tokens[texture_member], &material.base_color_texture_index);
+            }
+          }
+        }
+      }
+
+      out_document->materials[i] = material;
+    }
+  }
+
+  value_index = palm_render_json_object_get(json_text, tokens, token_count, (size_t)root_index, "images");
+  if (value_index >= 0 && tokens[value_index].type == PALM_JSON_ARRAY)
+  {
+    out_document->image_count = (size_t)tokens[value_index].size;
+    out_document->images = (PalmGltfImage*)calloc(out_document->image_count, sizeof(PalmGltfImage));
+    out_document->decoded_images = (PalmGltfDecodedImage*)calloc(out_document->image_count, sizeof(PalmGltfDecodedImage));
+    if (out_document->image_count > 0U && (out_document->images == NULL || out_document->decoded_images == NULL))
+    {
+      palm_render_destroy_gltf_document(out_document);
+      free(json_text);
+      free(tokens);
+      palm_render_show_error("Memory Error", "Failed to allocate GLB images.");
+      return 0;
+    }
+
+    for (i = 0U; i < out_document->image_count; ++i)
+    {
+      const int image_index = palm_render_json_array_get(tokens, token_count, (size_t)value_index, i);
+      int member_index = -1;
+      int buffer_view_index = -1;
+
+      if (image_index < 0 || tokens[image_index].type != PALM_JSON_OBJECT)
+      {
+        continue;
+      }
+      member_index = palm_render_json_object_get(json_text, tokens, token_count, (size_t)image_index, "bufferView");
+      if (member_index >= 0)
+      {
+        (void)palm_render_json_token_to_int(json_text, &tokens[member_index], &buffer_view_index);
+      }
+      if (buffer_view_index >= 0 && (size_t)buffer_view_index < out_document->buffer_view_count)
+      {
+        const PalmGltfBufferView* buffer_view = &out_document->buffer_views[buffer_view_index];
+        if (buffer_view->byte_offset + buffer_view->byte_length <= out_document->binary_chunk_size)
+        {
+          out_document->images[i].bytes = out_document->binary_chunk + buffer_view->byte_offset;
+          out_document->images[i].byte_length = buffer_view->byte_length;
+        }
+      }
+    }
+  }
+
+  value_index = palm_render_json_object_get(json_text, tokens, token_count, (size_t)root_index, "meshes");
+  if (value_index >= 0 && tokens[value_index].type == PALM_JSON_ARRAY)
+  {
+    out_document->mesh_count = (size_t)tokens[value_index].size;
+    out_document->meshes = (PalmGltfMesh*)calloc(out_document->mesh_count, sizeof(PalmGltfMesh));
+    if (out_document->mesh_count > 0U && out_document->meshes == NULL)
+    {
+      palm_render_destroy_gltf_document(out_document);
+      free(json_text);
+      free(tokens);
+      palm_render_show_error("Memory Error", "Failed to allocate GLB meshes.");
+      return 0;
+    }
+
+    for (i = 0U; i < out_document->mesh_count; ++i)
+    {
+      const int mesh_index = palm_render_json_array_get(tokens, token_count, (size_t)value_index, i);
+      const int primitives_index =
+        (mesh_index >= 0) ? palm_render_json_object_get(json_text, tokens, token_count, (size_t)mesh_index, "primitives") : -1;
+      size_t primitive_index = 0U;
+
+      if (primitives_index < 0 || tokens[primitives_index].type != PALM_JSON_ARRAY)
+      {
+        continue;
+      }
+
+      out_document->meshes[i].primitive_count = (size_t)tokens[primitives_index].size;
+      out_document->meshes[i].primitives =
+        (PalmGltfPrimitive*)calloc(out_document->meshes[i].primitive_count, sizeof(PalmGltfPrimitive));
+      if (out_document->meshes[i].primitive_count > 0U && out_document->meshes[i].primitives == NULL)
+      {
+        palm_render_destroy_gltf_document(out_document);
+        free(json_text);
+        free(tokens);
+        palm_render_show_error("Memory Error", "Failed to allocate GLB primitives.");
+        return 0;
+      }
+
+      for (primitive_index = 0U; primitive_index < out_document->meshes[i].primitive_count; ++primitive_index)
+      {
+        const int primitive_token_index = palm_render_json_array_get(tokens, token_count, (size_t)primitives_index, primitive_index);
+        PalmGltfPrimitive primitive = { -1, -1, -1, -1, -1, 4 };
+        int member_index = -1;
+
+        if (primitive_token_index < 0 || tokens[primitive_token_index].type != PALM_JSON_OBJECT)
+        {
+          out_document->meshes[i].primitives[primitive_index] = primitive;
+          continue;
+        }
+
+        member_index = palm_render_json_object_get(json_text, tokens, token_count, (size_t)primitive_token_index, "indices");
+        if (member_index >= 0)
+        {
+          (void)palm_render_json_token_to_int(json_text, &tokens[member_index], &primitive.indices_accessor_index);
+        }
+        member_index = palm_render_json_object_get(json_text, tokens, token_count, (size_t)primitive_token_index, "material");
+        if (member_index >= 0)
+        {
+          (void)palm_render_json_token_to_int(json_text, &tokens[member_index], &primitive.material_index);
+        }
+        member_index = palm_render_json_object_get(json_text, tokens, token_count, (size_t)primitive_token_index, "mode");
+        if (member_index >= 0)
+        {
+          (void)palm_render_json_token_to_int(json_text, &tokens[member_index], &primitive.mode);
+        }
+
+        member_index = palm_render_json_object_get(json_text, tokens, token_count, (size_t)primitive_token_index, "attributes");
+        if (member_index >= 0 && tokens[member_index].type == PALM_JSON_OBJECT)
+        {
+          int attribute_index = palm_render_json_object_get(json_text, tokens, token_count, (size_t)member_index, "POSITION");
+          if (attribute_index >= 0)
+          {
+            (void)palm_render_json_token_to_int(json_text, &tokens[attribute_index], &primitive.position_accessor_index);
+          }
+          attribute_index = palm_render_json_object_get(json_text, tokens, token_count, (size_t)member_index, "NORMAL");
+          if (attribute_index >= 0)
+          {
+            (void)palm_render_json_token_to_int(json_text, &tokens[attribute_index], &primitive.normal_accessor_index);
+          }
+          attribute_index = palm_render_json_object_get(json_text, tokens, token_count, (size_t)member_index, "TEXCOORD_0");
+          if (attribute_index >= 0)
+          {
+            (void)palm_render_json_token_to_int(json_text, &tokens[attribute_index], &primitive.texcoord_accessor_index);
+          }
+        }
+
+        out_document->meshes[i].primitives[primitive_index] = primitive;
+      }
+    }
+  }
+
+  value_index = palm_render_json_object_get(json_text, tokens, token_count, (size_t)root_index, "nodes");
+  if (value_index >= 0 && tokens[value_index].type == PALM_JSON_ARRAY)
+  {
+    out_document->node_count = (size_t)tokens[value_index].size;
+    out_document->nodes = (PalmGltfNode*)calloc(out_document->node_count, sizeof(PalmGltfNode));
+    if (out_document->node_count > 0U && out_document->nodes == NULL)
+    {
+      palm_render_destroy_gltf_document(out_document);
+      free(json_text);
+      free(tokens);
+      palm_render_show_error("Memory Error", "Failed to allocate GLB nodes.");
+      return 0;
+    }
+
+    for (i = 0U; i < out_document->node_count; ++i)
+    {
+      const int node_index = palm_render_json_array_get(tokens, token_count, (size_t)value_index, i);
+      int member_index = -1;
+      PalmVec3 translation = { 0.0f, 0.0f, 0.0f };
+      PalmVec3 scale = { 1.0f, 1.0f, 1.0f };
+      float rotation[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
+      size_t child_index = 0U;
+
+      out_document->nodes[i].mesh_index = -1;
+      palm_render_matrix_identity(out_document->nodes[i].transform);
+      if (node_index < 0 || tokens[node_index].type != PALM_JSON_OBJECT)
+      {
+        continue;
+      }
+
+      member_index = palm_render_json_object_get(json_text, tokens, token_count, (size_t)node_index, "mesh");
+      if (member_index >= 0)
+      {
+        (void)palm_render_json_token_to_int(json_text, &tokens[member_index], &out_document->nodes[i].mesh_index);
+      }
+
+      member_index = palm_render_json_object_get(json_text, tokens, token_count, (size_t)node_index, "children");
+      if (member_index >= 0 && tokens[member_index].type == PALM_JSON_ARRAY)
+      {
+        out_document->nodes[i].child_count = (size_t)tokens[member_index].size;
+        out_document->nodes[i].children = (int*)calloc(out_document->nodes[i].child_count, sizeof(int));
+        if (out_document->nodes[i].child_count > 0U && out_document->nodes[i].children == NULL)
+        {
+          palm_render_destroy_gltf_document(out_document);
+          free(json_text);
+          free(tokens);
+          palm_render_show_error("Memory Error", "Failed to allocate GLB node children.");
+          return 0;
+        }
+        for (child_index = 0U; child_index < out_document->nodes[i].child_count; ++child_index)
+        {
+          const int child_token = palm_render_json_array_get(tokens, token_count, (size_t)member_index, child_index);
+          if (child_token >= 0)
+          {
+            (void)palm_render_json_token_to_int(json_text, &tokens[child_token], &out_document->nodes[i].children[child_index]);
+          }
+        }
+      }
+
+      member_index = palm_render_json_object_get(json_text, tokens, token_count, (size_t)node_index, "matrix");
+      if (member_index >= 0 && tokens[member_index].type == PALM_JSON_ARRAY && tokens[member_index].size >= 16)
+      {
+        size_t matrix_index = 0U;
+        for (matrix_index = 0U; matrix_index < 16U; ++matrix_index)
+        {
+          const int value_token = palm_render_json_array_get(tokens, token_count, (size_t)member_index, matrix_index);
+          if (value_token >= 0)
+          {
+            (void)palm_render_json_token_to_float(json_text, &tokens[value_token], &out_document->nodes[i].transform[matrix_index]);
+          }
+        }
+      }
+      else
+      {
+        member_index = palm_render_json_object_get(json_text, tokens, token_count, (size_t)node_index, "translation");
+        if (member_index >= 0 && tokens[member_index].type == PALM_JSON_ARRAY)
+        {
+          const int tx = palm_render_json_array_get(tokens, token_count, (size_t)member_index, 0U);
+          const int ty = palm_render_json_array_get(tokens, token_count, (size_t)member_index, 1U);
+          const int tz = palm_render_json_array_get(tokens, token_count, (size_t)member_index, 2U);
+          if (tx >= 0)
+          {
+            (void)palm_render_json_token_to_float(json_text, &tokens[tx], &translation.x);
+          }
+          if (ty >= 0)
+          {
+            (void)palm_render_json_token_to_float(json_text, &tokens[ty], &translation.y);
+          }
+          if (tz >= 0)
+          {
+            (void)palm_render_json_token_to_float(json_text, &tokens[tz], &translation.z);
+          }
+        }
+
+        member_index = palm_render_json_object_get(json_text, tokens, token_count, (size_t)node_index, "rotation");
+        if (member_index >= 0 && tokens[member_index].type == PALM_JSON_ARRAY)
+        {
+          size_t component_index = 0U;
+          for (component_index = 0U; component_index < 4U; ++component_index)
+          {
+            const int component_token = palm_render_json_array_get(tokens, token_count, (size_t)member_index, component_index);
+            if (component_token >= 0)
+            {
+              (void)palm_render_json_token_to_float(json_text, &tokens[component_token], &rotation[component_index]);
+            }
+          }
+        }
+
+        member_index = palm_render_json_object_get(json_text, tokens, token_count, (size_t)node_index, "scale");
+        if (member_index >= 0 && tokens[member_index].type == PALM_JSON_ARRAY)
+        {
+          const int sx = palm_render_json_array_get(tokens, token_count, (size_t)member_index, 0U);
+          const int sy = palm_render_json_array_get(tokens, token_count, (size_t)member_index, 1U);
+          const int sz = palm_render_json_array_get(tokens, token_count, (size_t)member_index, 2U);
+          if (sx >= 0)
+          {
+            (void)palm_render_json_token_to_float(json_text, &tokens[sx], &scale.x);
+          }
+          if (sy >= 0)
+          {
+            (void)palm_render_json_token_to_float(json_text, &tokens[sy], &scale.y);
+          }
+          if (sz >= 0)
+          {
+            (void)palm_render_json_token_to_float(json_text, &tokens[sz], &scale.z);
+          }
+        }
+
+        palm_render_matrix_from_trs(out_document->nodes[i].transform, &translation, rotation, &scale);
+      }
+    }
+  }
+
+  value_index = palm_render_json_object_get(json_text, tokens, token_count, (size_t)root_index, "scene");
+  if (value_index >= 0)
+  {
+    (void)palm_render_json_token_to_int(json_text, &tokens[value_index], &default_scene);
+  }
+
+  value_index = palm_render_json_object_get(json_text, tokens, token_count, (size_t)root_index, "scenes");
+  if (value_index >= 0 && tokens[value_index].type == PALM_JSON_ARRAY)
+  {
+    const int scene_index = palm_render_json_array_get(tokens, token_count, (size_t)value_index, (size_t)((default_scene >= 0) ? default_scene : 0));
+    if (scene_index >= 0 && tokens[scene_index].type == PALM_JSON_OBJECT)
+    {
+      const int scene_nodes_index = palm_render_json_object_get(json_text, tokens, token_count, (size_t)scene_index, "nodes");
+      if (scene_nodes_index >= 0 && tokens[scene_nodes_index].type == PALM_JSON_ARRAY)
+      {
+        out_document->scene_root_count = (size_t)tokens[scene_nodes_index].size;
+        out_document->scene_roots = (int*)calloc(out_document->scene_root_count, sizeof(int));
+        if (out_document->scene_root_count > 0U && out_document->scene_roots == NULL)
+        {
+          palm_render_destroy_gltf_document(out_document);
+          free(json_text);
+          free(tokens);
+          palm_render_show_error("Memory Error", "Failed to allocate GLB scene roots.");
+          return 0;
+        }
+
+        for (i = 0U; i < out_document->scene_root_count; ++i)
+        {
+          const int root_token = palm_render_json_array_get(tokens, token_count, (size_t)scene_nodes_index, i);
+          if (root_token >= 0)
+          {
+            (void)palm_render_json_token_to_int(json_text, &tokens[root_token], &out_document->scene_roots[i]);
+          }
+        }
+      }
+    }
+  }
+
+  if (out_document->scene_root_count == 0U && out_document->node_count > 0U)
+  {
+    out_document->scene_root_count = 1U;
+    out_document->scene_roots = (int*)calloc(1U, sizeof(int));
+    if (out_document->scene_roots == NULL)
+    {
+      palm_render_destroy_gltf_document(out_document);
+      free(json_text);
+      free(tokens);
+      palm_render_show_error("Memory Error", "Failed to allocate fallback GLB root node.");
+      return 0;
+    }
+    out_document->scene_roots[0] = 0;
+  }
+
+  diagnostics_logf(
+    "palm_render: parsed GLB meshes=%d materials=%d images=%d source=%s",
+    (int)out_document->mesh_count,
+    (int)out_document->material_count,
+    (int)out_document->image_count,
+    asset_path);
+
+  free(json_text);
+  free(tokens);
+  return 1;
+}
+
+static void palm_render_destroy_gltf_document(PalmGltfDocument* document)
+{
+  size_t i = 0U;
+
+  if (document == NULL)
+  {
+    return;
+  }
+
+  if (document->decoded_images != NULL)
+  {
+    for (i = 0U; i < document->image_count; ++i)
+    {
+      if (document->decoded_images[i].pixels != NULL)
+      {
+        stbi_image_free(document->decoded_images[i].pixels);
+      }
+    }
+    free(document->decoded_images);
+  }
+
+  if (document->nodes != NULL)
+  {
+    for (i = 0U; i < document->node_count; ++i)
+    {
+      free(document->nodes[i].children);
+    }
+  }
+
+  if (document->meshes != NULL)
+  {
+    for (i = 0U; i < document->mesh_count; ++i)
+    {
+      free(document->meshes[i].primitives);
+    }
+  }
+
+  free(document->scene_roots);
+  free(document->nodes);
+  free(document->meshes);
+  free(document->images);
+  free(document->materials);
+  free(document->textures);
+  free(document->accessors);
+  free(document->buffer_views);
+  free(document->owned_data);
+  memset(document, 0, sizeof(*document));
+}
+
+static int palm_render_decode_gltf_image(PalmGltfDocument* document, int image_index)
+{
+  PalmGltfDecodedImage* image = NULL;
+
+  if (document == NULL || image_index < 0 || (size_t)image_index >= document->image_count)
+  {
+    return 0;
+  }
+
+  image = &document->decoded_images[image_index];
+  if (image->pixels != NULL)
+  {
+    return 1;
+  }
+
+  if (document->images[image_index].bytes == NULL || document->images[image_index].byte_length == 0U)
+  {
+    return 0;
+  }
+
+  image->pixels = stbi_load_from_memory(
+    document->images[image_index].bytes,
+    (int)document->images[image_index].byte_length,
+    &image->width,
+    &image->height,
+    &image->channels,
+    4);
+  image->channels = 4;
+  return image->pixels != NULL;
+}
+
+static PalmColor palm_render_sample_gltf_material_color(const PalmGltfDocument* document, int material_index, PalmVec2 texcoord)
+{
+  PalmColor color = { 1.0f, 1.0f, 1.0f };
+
+  if (document == NULL || material_index < 0 || (size_t)material_index >= document->material_count)
+  {
+    return color;
+  }
+
+  color = document->materials[material_index].base_color;
+  if (document->materials[material_index].base_color_texture_index >= 0 &&
+    (size_t)document->materials[material_index].base_color_texture_index < document->texture_count)
+  {
+    const PalmGltfTexture* texture = &document->textures[document->materials[material_index].base_color_texture_index];
+    PalmGltfDocument* mutable_document = (PalmGltfDocument*)document;
+
+    if (texture->image_index >= 0 &&
+      (size_t)texture->image_index < document->image_count &&
+      palm_render_decode_gltf_image(mutable_document, texture->image_index))
+    {
+      const PalmGltfDecodedImage* image = &document->decoded_images[texture->image_index];
+      const float wrapped_u = texcoord.x - floorf(texcoord.x);
+      const float wrapped_v = texcoord.y - floorf(texcoord.y);
+      const float pixel_x = wrapped_u * (float)(image->width - 1);
+      const float pixel_y = wrapped_v * (float)(image->height - 1);
+      const int x0 = (int)floorf(pixel_x);
+      const int y0 = (int)floorf(pixel_y);
+      const int x1 = (x0 + 1 < image->width) ? (x0 + 1) : x0;
+      const int y1 = (y0 + 1 < image->height) ? (y0 + 1) : y0;
+      const float tx = pixel_x - (float)x0;
+      const float ty = pixel_y - (float)y0;
+      const unsigned char* c00 = image->pixels + ((y0 * image->width + x0) * 4);
+      const unsigned char* c10 = image->pixels + ((y0 * image->width + x1) * 4);
+      const unsigned char* c01 = image->pixels + ((y1 * image->width + x0) * 4);
+      const unsigned char* c11 = image->pixels + ((y1 * image->width + x1) * 4);
+      const float sample_r0 = palm_render_mix((float)c00[0] / 255.0f, (float)c10[0] / 255.0f, tx);
+      const float sample_g0 = palm_render_mix((float)c00[1] / 255.0f, (float)c10[1] / 255.0f, tx);
+      const float sample_b0 = palm_render_mix((float)c00[2] / 255.0f, (float)c10[2] / 255.0f, tx);
+      const float sample_r1 = palm_render_mix((float)c01[0] / 255.0f, (float)c11[0] / 255.0f, tx);
+      const float sample_g1 = palm_render_mix((float)c01[1] / 255.0f, (float)c11[1] / 255.0f, tx);
+      const float sample_b1 = palm_render_mix((float)c01[2] / 255.0f, (float)c11[2] / 255.0f, tx);
+
+      color.r *= palm_render_mix(sample_r0, sample_r1, ty);
+      color.g *= palm_render_mix(sample_g0, sample_g1, ty);
+      color.b *= palm_render_mix(sample_b0, sample_b1, ty);
+    }
+  }
+
+  color.r = palm_render_clamp(color.r, 0.0f, 1.0f);
+  color.g = palm_render_clamp(color.g, 0.0f, 1.0f);
+  color.b = palm_render_clamp(color.b, 0.0f, 1.0f);
+  return color;
+}
+
+static int palm_render_append_gltf_node_vertices(
+  const PalmGltfDocument* document,
+  int node_index,
+  const float* parent_matrix,
+  PalmVertexArray* vertices)
+{
+  float world_matrix[16] = { 0 };
+  size_t primitive_index = 0U;
+  size_t child_index = 0U;
+
+  if (document == NULL || vertices == NULL)
+  {
+    return 0;
+  }
+  if (node_index < 0 || (size_t)node_index >= document->node_count)
+  {
+    return 1;
+  }
+
+  if (parent_matrix != NULL)
+  {
+    palm_render_matrix_multiply(world_matrix, parent_matrix, document->nodes[node_index].transform);
+  }
+  else
+  {
+    memcpy(world_matrix, document->nodes[node_index].transform, sizeof(world_matrix));
+  }
+
+  if (document->nodes[node_index].mesh_index >= 0 &&
+    (size_t)document->nodes[node_index].mesh_index < document->mesh_count)
+  {
+    const PalmGltfMesh* mesh = &document->meshes[document->nodes[node_index].mesh_index];
+    for (primitive_index = 0U; primitive_index < mesh->primitive_count; ++primitive_index)
+    {
+      const PalmGltfPrimitive* primitive = &mesh->primitives[primitive_index];
+      size_t triangle_index = 0U;
+
+      if (primitive->mode != 4 ||
+        primitive->indices_accessor_index < 0 ||
+        primitive->position_accessor_index < 0 ||
+        (size_t)primitive->indices_accessor_index >= document->accessor_count ||
+        (size_t)primitive->position_accessor_index >= document->accessor_count)
+      {
+        continue;
+      }
+
+      {
+        const PalmGltfAccessor* index_accessor = &document->accessors[primitive->indices_accessor_index];
+        const PalmGltfAccessor* position_accessor = &document->accessors[primitive->position_accessor_index];
+        const PalmGltfAccessor* normal_accessor =
+          (primitive->normal_accessor_index >= 0 && (size_t)primitive->normal_accessor_index < document->accessor_count)
+            ? &document->accessors[primitive->normal_accessor_index]
+            : NULL;
+        const PalmGltfAccessor* texcoord_accessor =
+          (primitive->texcoord_accessor_index >= 0 && (size_t)primitive->texcoord_accessor_index < document->accessor_count)
+            ? &document->accessors[primitive->texcoord_accessor_index]
+            : NULL;
+        const PalmGltfBufferView* index_view = NULL;
+        const PalmGltfBufferView* position_view = NULL;
+        const PalmGltfBufferView* normal_view = NULL;
+        const PalmGltfBufferView* texcoord_view = NULL;
+        const size_t index_component_size = palm_render_gltf_component_size(index_accessor->component_type);
+        const size_t position_component_size = palm_render_gltf_component_size(position_accessor->component_type);
+        size_t index_stride = 0U;
+        size_t position_stride = 0U;
+        size_t normal_stride = 0U;
+        size_t texcoord_stride = 0U;
+        const unsigned char* index_base = NULL;
+        const unsigned char* position_base = NULL;
+        const unsigned char* normal_base = NULL;
+        const unsigned char* texcoord_base = NULL;
+
+        if (index_accessor->buffer_view_index < 0 ||
+          position_accessor->buffer_view_index < 0 ||
+          (size_t)index_accessor->buffer_view_index >= document->buffer_view_count ||
+          (size_t)position_accessor->buffer_view_index >= document->buffer_view_count ||
+          position_accessor->component_count < 3 ||
+          index_component_size == 0U ||
+          position_component_size == 0U)
+        {
+          continue;
+        }
+
+        index_view = &document->buffer_views[index_accessor->buffer_view_index];
+        position_view = &document->buffer_views[position_accessor->buffer_view_index];
+        normal_view = (normal_accessor != NULL && normal_accessor->buffer_view_index >= 0 &&
+          (size_t)normal_accessor->buffer_view_index < document->buffer_view_count)
+          ? &document->buffer_views[normal_accessor->buffer_view_index]
+          : NULL;
+        texcoord_view = (texcoord_accessor != NULL && texcoord_accessor->buffer_view_index >= 0 &&
+          (size_t)texcoord_accessor->buffer_view_index < document->buffer_view_count)
+          ? &document->buffer_views[texcoord_accessor->buffer_view_index]
+          : NULL;
+
+        index_stride = (index_view->byte_stride != 0U) ? index_view->byte_stride : index_component_size;
+        position_stride = (position_view->byte_stride != 0U) ? position_view->byte_stride : position_component_size * (size_t)position_accessor->component_count;
+        normal_stride =
+          (normal_view != NULL && normal_view->byte_stride != 0U) ? normal_view->byte_stride :
+          ((normal_accessor != NULL) ? palm_render_gltf_component_size(normal_accessor->component_type) * (size_t)normal_accessor->component_count : 0U);
+        texcoord_stride =
+          (texcoord_view != NULL && texcoord_view->byte_stride != 0U) ? texcoord_view->byte_stride :
+          ((texcoord_accessor != NULL) ? palm_render_gltf_component_size(texcoord_accessor->component_type) * (size_t)texcoord_accessor->component_count : 0U);
+
+        if (index_view->byte_offset + index_accessor->byte_offset >= document->binary_chunk_size ||
+          position_view->byte_offset + position_accessor->byte_offset >= document->binary_chunk_size)
+        {
+          continue;
+        }
+
+        index_base = document->binary_chunk + index_view->byte_offset + index_accessor->byte_offset;
+        position_base = document->binary_chunk + position_view->byte_offset + position_accessor->byte_offset;
+        if (normal_view != NULL && normal_accessor != NULL &&
+          normal_view->byte_offset + normal_accessor->byte_offset < document->binary_chunk_size)
+        {
+          normal_base = document->binary_chunk + normal_view->byte_offset + normal_accessor->byte_offset;
+        }
+        if (texcoord_view != NULL && texcoord_accessor != NULL &&
+          texcoord_view->byte_offset + texcoord_accessor->byte_offset < document->binary_chunk_size)
+        {
+          texcoord_base = document->binary_chunk + texcoord_view->byte_offset + texcoord_accessor->byte_offset;
+        }
+
+        for (triangle_index = 0U; triangle_index + 2U < index_accessor->count; triangle_index += 3U)
+        {
+          unsigned int vertex_indices[3] = { 0U, 0U, 0U };
+          PalmVec3 triangle_positions[3];
+          PalmVec3 triangle_normals[3];
+          PalmVec2 triangle_texcoords[3];
+          PalmColor triangle_colors[3];
+          PalmVec3 face_normal = { 0.0f, 1.0f, 0.0f };
+          int has_normals = (normal_accessor != NULL && normal_base != NULL && normal_accessor->component_count >= 3);
+          int triangle_valid = 1;
+          int local_vertex = 0;
+
+          for (local_vertex = 0; local_vertex < 3; ++local_vertex)
+          {
+            const unsigned char* index_ptr = index_base + (triangle_index + (size_t)local_vertex) * index_stride;
+            vertex_indices[local_vertex] = palm_render_gltf_read_index(index_ptr, index_accessor->component_type);
+            if ((size_t)vertex_indices[local_vertex] >= position_accessor->count)
+            {
+              triangle_valid = 0;
+              break;
+            }
+          }
+          if (!triangle_valid)
+          {
+            continue;
+          }
+
+          for (local_vertex = 0; local_vertex < 3; ++local_vertex)
+          {
+            const unsigned char* position_ptr = position_base + (size_t)vertex_indices[local_vertex] * position_stride;
+            PalmVec3 position = {
+              palm_render_gltf_read_component_as_float(position_ptr, position_accessor->component_type, position_accessor->normalized),
+              palm_render_gltf_read_component_as_float(position_ptr + position_component_size, position_accessor->component_type, position_accessor->normalized),
+              palm_render_gltf_read_component_as_float(position_ptr + position_component_size * 2U, position_accessor->component_type, position_accessor->normalized)
+            };
+            PalmVec2 texcoord = { 0.0f, 0.0f };
+            triangle_positions[local_vertex] = palm_render_transform_point(world_matrix, position);
+
+            if (texcoord_accessor != NULL &&
+              texcoord_base != NULL &&
+              texcoord_accessor->component_count >= 2 &&
+              (size_t)vertex_indices[local_vertex] < texcoord_accessor->count)
+            {
+              const size_t texcoord_component_size = palm_render_gltf_component_size(texcoord_accessor->component_type);
+              const unsigned char* texcoord_ptr = texcoord_base + (size_t)vertex_indices[local_vertex] * texcoord_stride;
+              texcoord.x = palm_render_gltf_read_component_as_float(texcoord_ptr, texcoord_accessor->component_type, texcoord_accessor->normalized);
+              texcoord.y = palm_render_gltf_read_component_as_float(
+                texcoord_ptr + texcoord_component_size,
+                texcoord_accessor->component_type,
+                texcoord_accessor->normalized);
+            }
+            triangle_texcoords[local_vertex] = texcoord;
+            triangle_colors[local_vertex] = palm_render_sample_gltf_material_color(document, primitive->material_index, texcoord);
+
+            if (has_normals && (size_t)vertex_indices[local_vertex] < normal_accessor->count)
+            {
+              const size_t normal_component_size = palm_render_gltf_component_size(normal_accessor->component_type);
+              const unsigned char* normal_ptr = normal_base + (size_t)vertex_indices[local_vertex] * normal_stride;
+              const PalmVec3 normal = {
+                palm_render_gltf_read_component_as_float(normal_ptr, normal_accessor->component_type, normal_accessor->normalized),
+                palm_render_gltf_read_component_as_float(normal_ptr + normal_component_size, normal_accessor->component_type, normal_accessor->normalized),
+                palm_render_gltf_read_component_as_float(normal_ptr + normal_component_size * 2U, normal_accessor->component_type, normal_accessor->normalized)
+              };
+              triangle_normals[local_vertex] = palm_render_transform_direction(world_matrix, normal);
+            }
+          }
+
+          if (!has_normals)
+          {
+            face_normal = palm_render_vec3_normalize(
+              palm_render_vec3_cross(
+                palm_render_vec3_subtract(triangle_positions[1], triangle_positions[0]),
+                palm_render_vec3_subtract(triangle_positions[2], triangle_positions[0])));
+          }
+
+          for (local_vertex = 0; local_vertex < 3; ++local_vertex)
+          {
+            const PalmVec3 normal = has_normals ? triangle_normals[local_vertex] : face_normal;
+            const PalmVertex vertex = {
+              {
+                triangle_positions[local_vertex].x,
+                triangle_positions[local_vertex].y,
+                triangle_positions[local_vertex].z
+              },
+              { normal.x, normal.y, normal.z },
+              {
+                triangle_colors[local_vertex].r,
+                triangle_colors[local_vertex].g,
+                triangle_colors[local_vertex].b
+              },
+              { 0.0f, 0.0f }
+            };
+
+            if (!palm_render_push_vertex(vertices, vertex))
+            {
+              palm_render_show_error("Memory Error", "Failed to store GLB triangles.");
+              return 0;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  for (child_index = 0U; child_index < document->nodes[node_index].child_count; ++child_index)
+  {
+    if (!palm_render_append_gltf_node_vertices(
+      document,
+      document->nodes[node_index].children[child_index],
+      world_matrix,
+      vertices))
+    {
+      return 0;
+    }
+  }
+
+  return 1;
+}
+
+static int palm_render_load_glb_vertices(
+  const char* relative_asset_path,
+  PalmVertex** out_vertices,
+  GLsizei* out_vertex_count,
+  float* out_model_height,
+  float* out_model_radius)
+{
+  PalmGltfDocument document = { 0 };
+  PalmVertexArray vertices = { 0 };
+  PalmVec3 bounds_min = { 1.0e9f, 1.0e9f, 1.0e9f };
+  PalmVec3 bounds_max = { -1.0e9f, -1.0e9f, -1.0e9f };
+  PalmVec3 base_center = { 0.0f, 0.0f, 0.0f };
+  size_t base_count = 0U;
+  size_t i = 0U;
+  float identity[16] = { 0 };
+
+  if (relative_asset_path == NULL || out_vertices == NULL || out_vertex_count == NULL || out_model_height == NULL || out_model_radius == NULL)
+  {
+    return 0;
+  }
+
+  *out_vertices = NULL;
+  *out_vertex_count = 0;
+  *out_model_height = 1.0f;
+  *out_model_radius = 1.0f;
+
+  if (!palm_render_parse_glb_document(relative_asset_path, &document))
+  {
+    return 0;
+  }
+
+  palm_render_matrix_identity(identity);
+  for (i = 0U; i < document.scene_root_count; ++i)
+  {
+    if (!palm_render_append_gltf_node_vertices(&document, document.scene_roots[i], identity, &vertices))
+    {
+      palm_render_destroy_gltf_document(&document);
+      free(vertices.data);
+      return 0;
+    }
+  }
+
+  if (vertices.count == 0U)
+  {
+    palm_render_destroy_gltf_document(&document);
+    free(vertices.data);
+    palm_render_show_error("GLB Error", "GLB did not contain any renderable geometry.");
+    return 0;
+  }
+
+  for (i = 0U; i < vertices.count; ++i)
+  {
+    const PalmVertex* vertex = &vertices.data[i];
+    if (vertex->position[0] < bounds_min.x)
+    {
+      bounds_min.x = vertex->position[0];
+    }
+    if (vertex->position[1] < bounds_min.y)
+    {
+      bounds_min.y = vertex->position[1];
+    }
+    if (vertex->position[2] < bounds_min.z)
+    {
+      bounds_min.z = vertex->position[2];
+    }
+    if (vertex->position[0] > bounds_max.x)
+    {
+      bounds_max.x = vertex->position[0];
+    }
+    if (vertex->position[1] > bounds_max.y)
+    {
+      bounds_max.y = vertex->position[1];
+    }
+    if (vertex->position[2] > bounds_max.z)
+    {
+      bounds_max.z = vertex->position[2];
+    }
+  }
+
+  for (i = 0U; i < vertices.count; ++i)
+  {
+    const PalmVertex* vertex = &vertices.data[i];
+    if (vertex->position[1] <= bounds_min.y + palm_render_clamp((bounds_max.y - bounds_min.y) * 0.03f, 0.5f, 6.0f))
+    {
+      base_center.x += vertex->position[0];
+      base_center.z += vertex->position[2];
+      base_count += 1U;
+    }
+  }
+  if (base_count > 0U)
+  {
+    base_center.x /= (float)base_count;
+    base_center.z /= (float)base_count;
+  }
+
+  for (i = 0U; i < vertices.count; ++i)
+  {
+    vertices.data[i].position[0] -= base_center.x;
+    vertices.data[i].position[1] -= bounds_min.y;
+    vertices.data[i].position[2] -= base_center.z;
+  }
+
+  *out_vertices = vertices.data;
+  *out_vertex_count = (GLsizei)vertices.count;
+  *out_model_height = palm_render_clamp(bounds_max.y - bounds_min.y, 1.0f, 10000.0f);
+  {
+    const float model_width = bounds_max.x - bounds_min.x;
+    const float model_depth = bounds_max.z - bounds_min.z;
+    const float model_span = (model_width > model_depth) ? model_width : model_depth;
+    *out_model_radius = palm_render_clamp(model_span * 0.5f, 1.0f, 10000.0f);
+  }
+
+  diagnostics_logf(
+    "palm_render: loaded GLB vertices=%d height=%.2f source=%s",
+    (int)*out_vertex_count,
+    *out_model_height,
+    relative_asset_path);
+
+  palm_render_destroy_gltf_document(&document);
+  return 1;
+}
+
+static int palm_render_load_model_vertices(
+  const char* relative_asset_path,
+  PalmVertex** out_vertices,
+  GLsizei* out_vertex_count,
+  float* out_model_height,
+  float* out_model_radius,
+  char* out_diffuse_texture_path,
+  size_t out_diffuse_texture_path_size)
+{
+  const char* extension = strrchr((relative_asset_path != NULL) ? relative_asset_path : "", '.');
+  int is_glb = 0;
+
+  if (extension != NULL && strlen(extension) == 4U)
+  {
+    is_glb =
+      tolower((unsigned char)extension[1]) == 'g' &&
+      tolower((unsigned char)extension[2]) == 'l' &&
+      tolower((unsigned char)extension[3]) == 'b' &&
+      extension[4] == '\0';
+  }
+
+  if (out_diffuse_texture_path != NULL && out_diffuse_texture_path_size > 0U)
+  {
+    out_diffuse_texture_path[0] = '\0';
+  }
+
+  if (is_glb)
+  {
+    return palm_render_load_glb_vertices(
+      relative_asset_path,
+      out_vertices,
+      out_vertex_count,
+      out_model_height,
+      out_model_radius);
+  }
+
+  return palm_render_load_obj_vertices(
+    relative_asset_path,
+    out_vertices,
+    out_vertex_count,
+    out_model_height,
+    out_model_radius,
+    out_diffuse_texture_path,
+    out_diffuse_texture_path_size);
+}
+
 static int palm_render_reserve_instances(PalmRenderVariant* variant, size_t required_instance_capacity)
 {
   if (variant == NULL)
@@ -2145,6 +4286,8 @@ static int palm_render_populate_palm_instances(
   ProceduralLodConfig lod_config;
   ProceduralLodState lod_state;
   const GLsizei max_vertex_count = palm_render_get_max_vertex_count_for_category(mesh, PALM_RENDER_CATEGORY_PALM);
+  const float house_radius = palm_render_clamp(settings->palm_render_radius * 3.35f, 220.0f, 720.0f);
+  const float house_cell_size = 128.0f;
   float radius = 0.0f;
   int effective_palm_target = 0;
   float cell_size = 0.0f;
@@ -2192,9 +4335,22 @@ static int palm_render_populate_palm_instances(
     const int grid_min_z = (int)floorf((camera->z - radius) / cell_size);
     const int grid_max_z = (int)ceilf((camera->z + radius) / cell_size);
     const size_t estimated_capacity = (size_t)(grid_max_x - grid_min_x + 1) * (size_t)(grid_max_z - grid_min_z + 1);
+    const int house_grid_min_x = (int)floorf((camera->x - house_radius) / house_cell_size);
+    const int house_grid_max_x = (int)ceilf((camera->x + house_radius) / house_cell_size);
+    const int house_grid_min_z = (int)floorf((camera->z - house_radius) / house_cell_size);
+    const int house_grid_max_z = (int)ceilf((camera->z + house_radius) / house_cell_size);
+    const size_t estimated_house_capacity =
+      (size_t)(house_grid_max_x - house_grid_min_x + 1) *
+      (size_t)(house_grid_max_z - house_grid_min_z + 1) * 2U;
     int variant_index = 0;
 
-    if (palm_render_cache_matches(mesh, grid_min_x, grid_max_x, grid_min_z, grid_max_z, radius, cell_size, settings))
+    if (palm_render_cache_matches(mesh, grid_min_x, grid_max_x, grid_min_z, grid_max_z, radius, cell_size, settings) &&
+      mesh->cache_house_grid_min_x == house_grid_min_x &&
+      mesh->cache_house_grid_max_x == house_grid_max_x &&
+      mesh->cache_house_grid_min_z == house_grid_min_z &&
+      mesh->cache_house_grid_max_z == house_grid_max_z &&
+      palm_render_float_nearly_equal(mesh->cache_house_radius, house_radius, 0.001f) &&
+      palm_render_float_nearly_equal(mesh->cache_house_cell_size, house_cell_size, 0.001f))
     {
       return 2;
     }
@@ -2206,6 +4362,10 @@ static int palm_render_populate_palm_instances(
     {
       PalmRenderVariant* variant = &mesh->variants[variant_index];
       if (variant->category == PALM_RENDER_CATEGORY_PALM && !palm_render_reserve_instances(variant, estimated_capacity))
+      {
+        return 0;
+      }
+      if (variant->category == PALM_RENDER_CATEGORY_HOUSE && !palm_render_reserve_instances(variant, estimated_house_capacity))
       {
         return 0;
       }
@@ -2268,13 +4428,24 @@ static int palm_render_populate_palm_instances(
       }
     }
 
+    if (!palm_render_populate_house_instances(mesh, camera, settings, house_radius, house_cell_size))
+    {
+      return 0;
+    }
+
     mesh->cache_valid = 1;
     mesh->cache_grid_min_x = grid_min_x;
     mesh->cache_grid_max_x = grid_max_x;
     mesh->cache_grid_min_z = grid_min_z;
     mesh->cache_grid_max_z = grid_max_z;
+    mesh->cache_house_grid_min_x = house_grid_min_x;
+    mesh->cache_house_grid_max_x = house_grid_max_x;
+    mesh->cache_house_grid_min_z = house_grid_min_z;
+    mesh->cache_house_grid_max_z = house_grid_max_z;
     mesh->cache_radius = radius;
     mesh->cache_cell_size = cell_size;
+    mesh->cache_house_radius = house_radius;
+    mesh->cache_house_cell_size = house_cell_size;
     mesh->cache_palm_size = settings->palm_size;
     mesh->cache_palm_count = settings->palm_count;
     mesh->cache_palm_fruit_density = settings->palm_fruit_density;
@@ -2283,6 +4454,181 @@ static int palm_render_populate_palm_instances(
     mesh->cache_terrain_height_scale = settings->terrain_height_scale;
     mesh->cache_terrain_roughness = settings->terrain_roughness;
     mesh->cache_terrain_ridge_strength = settings->terrain_ridge_strength;
+  }
+
+  return 1;
+}
+
+static int palm_render_add_house_instance(
+  PalmRenderMesh* mesh,
+  int grid_x,
+  int grid_z,
+  float x,
+  float z,
+  float distance,
+  const SceneSettings* settings,
+  int* in_out_near_count,
+  int* in_out_far_count)
+{
+  const float variation = palm_render_hash_unit(grid_x, grid_z, 80U);
+  const float scale_jitter = palm_render_hash_unit(grid_x, grid_z, 81U);
+  const float yaw = palm_render_hash_unit(grid_x, grid_z, 82U) * (k_palm_render_pi * 2.0f);
+  const float slope = palm_render_estimate_slope(x, z, settings);
+  PalmRenderVariant* variant = palm_render_pick_variant(mesh, PALM_RENDER_CATEGORY_HOUSE, grid_x, grid_z, 83U);
+  const float ground_y = terrain_get_height(x, z, settings);
+  const float size_bias = palm_render_mix(0.94f, 1.08f, palm_render_clamp(settings->palm_size, 0.0f, 1.0f));
+  PalmColor tint = {
+    palm_render_mix(0.92f, 1.04f, variation),
+    palm_render_mix(0.92f, 1.02f, scale_jitter),
+    palm_render_mix(0.90f, 1.00f, variation)
+  };
+  float desired_height = 0.0f;
+  float embed_depth = 0.0f;
+
+  if (mesh == NULL || settings == NULL || variant == NULL || variant->model_height <= 0.0001f || slope > variant->slope_limit)
+  {
+    return 1;
+  }
+  if ((size_t)variant->instance_count >= variant->cpu_instance_capacity)
+  {
+    return 1;
+  }
+
+  desired_height = palm_render_mix(variant->desired_height_min, variant->desired_height_max, variation) *
+    size_bias * palm_render_mix(variant->scale_jitter_min, variant->scale_jitter_max, scale_jitter);
+  embed_depth = palm_render_mix(variant->embed_depth_min, variant->embed_depth_max, variation) + slope * 0.08f;
+
+  palm_render_build_instance_transform(
+    &((PalmInstanceData*)variant->cpu_instances)[variant->instance_count],
+    x,
+    ground_y - embed_depth,
+    z,
+    desired_height / variant->model_height,
+    yaw,
+    tint);
+  variant->instance_count += 1;
+
+  if (in_out_near_count != NULL && distance <= 110.0f)
+  {
+    *in_out_near_count += 1;
+  }
+  if (in_out_far_count != NULL && distance >= 260.0f)
+  {
+    *in_out_far_count += 1;
+  }
+  return 1;
+}
+
+static int palm_render_populate_house_instances(
+  PalmRenderMesh* mesh,
+  const CameraState* camera,
+  const SceneSettings* settings,
+  float house_radius,
+  float house_cell_size)
+{
+  const int grid_min_x = (int)floorf((camera->x - house_radius) / house_cell_size);
+  const int grid_max_x = (int)ceilf((camera->x + house_radius) / house_cell_size);
+  const int grid_min_z = (int)floorf((camera->z - house_radius) / house_cell_size);
+  const int grid_max_z = (int)ceilf((camera->z + house_radius) / house_cell_size);
+  int near_count = 0;
+  int far_count = 0;
+  int grid_z = 0;
+
+  if (mesh == NULL || camera == NULL || settings == NULL || !palm_render_has_category(mesh, PALM_RENDER_CATEGORY_HOUSE))
+  {
+    return 1;
+  }
+
+  for (grid_z = grid_min_z; grid_z <= grid_max_z; ++grid_z)
+  {
+    int grid_x = 0;
+
+    for (grid_x = grid_min_x; grid_x <= grid_max_x; ++grid_x)
+    {
+      const float district = palm_render_hash_unit(grid_x / 2, grid_z / 2, 84U);
+      const float local_budget = palm_render_hash_unit(grid_x, grid_z, 85U);
+      const int local_count = (local_budget > 0.82f) ? 2 : 1;
+      int local_index = 0;
+
+      if (district < 0.28f)
+      {
+        continue;
+      }
+
+      for (local_index = 0; local_index < local_count; ++local_index)
+      {
+        const float offset_x = palm_render_mix(0.14f, 0.86f, palm_render_hash_unit(grid_x * 3 + local_index, grid_z, 86U));
+        const float offset_z = palm_render_mix(0.14f, 0.86f, palm_render_hash_unit(grid_x, grid_z * 3 + local_index, 87U));
+        const float x = ((float)grid_x + offset_x) * house_cell_size;
+        const float z = ((float)grid_z + offset_z) * house_cell_size;
+        const float dx = x - camera->x;
+        const float dz = z - camera->z;
+        const float distance = sqrtf(dx * dx + dz * dz);
+        const float near_weight = 1.0f - palm_render_clamp(distance / 115.0f, 0.0f, 1.0f);
+        const float far_weight = palm_render_clamp((distance - house_radius * 0.56f) / (house_radius * 0.34f), 0.0f, 1.0f);
+        const float middle_penalty = 1.0f - fabsf(palm_render_clamp(distance / house_radius, 0.0f, 1.0f) - 0.5f) * 2.0f;
+        const float spawn_bias = palm_render_clamp(palm_render_mix(near_weight, far_weight, 0.58f) - middle_penalty * 0.18f + district * 0.14f, 0.0f, 1.0f);
+        const float gate = palm_render_hash_unit(grid_x + local_index * 17, grid_z - local_index * 13, 88U);
+
+        if (distance > house_radius || gate > spawn_bias)
+        {
+          continue;
+        }
+        if (!palm_render_add_house_instance(
+          mesh,
+          grid_x * 5 + local_index,
+          grid_z * 5 - local_index,
+          x,
+          z,
+          distance,
+          settings,
+          &near_count,
+          &far_count))
+        {
+          return 0;
+        }
+      }
+    }
+  }
+
+  if (near_count <= 0)
+  {
+    int attempt = 0;
+    for (attempt = 0; attempt < 4; ++attempt)
+    {
+      const float angle = palm_render_hash_unit(attempt, 0, 89U) * (k_palm_render_pi * 2.0f);
+      const float distance = palm_render_mix(34.0f, 92.0f, palm_render_hash_unit(attempt, 0, 90U));
+      const float x = camera->x + cosf(angle) * distance;
+      const float z = camera->z + sinf(angle) * distance;
+      if (!palm_render_add_house_instance(mesh, 900 + attempt, -900 - attempt, x, z, distance, settings, &near_count, &far_count))
+      {
+        return 0;
+      }
+      if (near_count > 0)
+      {
+        break;
+      }
+    }
+  }
+
+  if (far_count <= 0)
+  {
+    int attempt = 0;
+    for (attempt = 0; attempt < 5; ++attempt)
+    {
+      const float angle = palm_render_hash_unit(attempt, 0, 91U) * (k_palm_render_pi * 2.0f);
+      const float distance = palm_render_mix(house_radius * 0.68f, house_radius * 0.94f, palm_render_hash_unit(attempt, 0, 92U));
+      const float x = camera->x + cosf(angle) * distance;
+      const float z = camera->z + sinf(angle) * distance;
+      if (!palm_render_add_house_instance(mesh, 1200 + attempt, 1400 - attempt, x, z, distance, settings, &near_count, &far_count))
+      {
+        return 0;
+      }
+      if (far_count > 0)
+      {
+        break;
+      }
+    }
   }
 
   return 1;
