@@ -55,6 +55,7 @@ typedef struct OverlayState
   float ui_time_seconds;
   float scroll_offset;
   float scroll_max;
+  float debug_console_scroll_offset;
 } OverlayState;
 
 enum
@@ -77,8 +78,34 @@ enum
   OVERLAY_UI_GPU_BUTTON_GAP = 8,
   OVERLAY_UI_GPU_CARD_PADDING = 10,
   OVERLAY_UI_ITEM_SPACING = 8,
-  OVERLAY_UI_METRIC_HEIGHT = 52
+  OVERLAY_UI_METRIC_HEIGHT = 52,
+  OVERLAY_DEBUG_CONSOLE_MARGIN = 16,
+  OVERLAY_DEBUG_CONSOLE_MAX_WIDTH = 560,
+  OVERLAY_DEBUG_CONSOLE_MIN_WIDTH = 220,
+  OVERLAY_DEBUG_CONSOLE_MIN_HEIGHT = 180,
+  OVERLAY_DEBUG_CONSOLE_MAX_HEIGHT = 280,
+  OVERLAY_DEBUG_CONSOLE_RESERVED_RIGHT = 334,
+  OVERLAY_DEBUG_CONSOLE_HEADER_HEIGHT = 28,
+  OVERLAY_DEBUG_CONSOLE_ROW_HEIGHT = 18,
+  OVERLAY_DEBUG_CONSOLE_PADDING_X = 12,
+  OVERLAY_DEBUG_CONSOLE_PADDING_Y = 12,
+  OVERLAY_DEBUG_CONSOLE_PINNED_ROW_COUNT = 2,
+  OVERLAY_DEBUG_CONSOLE_SECTION_GAP = 8,
+  OVERLAY_DEBUG_CONSOLE_SCROLLBAR_WIDTH = 10
 };
+
+static inline int overlay_clamp_int(int value, int min_value, int max_value)
+{
+  if (value < min_value)
+  {
+    return min_value;
+  }
+  if (value > max_value)
+  {
+    return max_value;
+  }
+  return value;
+}
 
 static inline int overlay_get_panel_toggle_button_rect(
   int panel_width,
@@ -226,6 +253,148 @@ static inline int overlay_get_panel_width_for_window(int window_width)
   }
 
   return overlay_width;
+}
+
+static inline int overlay_get_debug_console_rect(
+  int window_width,
+  int window_height,
+  int overlay_visible_width,
+  int* out_left,
+  int* out_top,
+  int* out_right,
+  int* out_bottom)
+{
+  const int left = overlay_visible_width + OVERLAY_DEBUG_CONSOLE_MARGIN;
+  const int right_limit = window_width - OVERLAY_DEBUG_CONSOLE_RESERVED_RIGHT;
+  int panel_width = right_limit - left;
+  const int panel_height = overlay_clamp_int(window_height / 3, OVERLAY_DEBUG_CONSOLE_MIN_HEIGHT, OVERLAY_DEBUG_CONSOLE_MAX_HEIGHT);
+  const int bottom = window_height - OVERLAY_DEBUG_CONSOLE_MARGIN;
+  const int top = bottom - panel_height;
+
+  if (window_width <= 0 || window_height <= 0 || right_limit <= left)
+  {
+    return 0;
+  }
+
+  if (panel_width > OVERLAY_DEBUG_CONSOLE_MAX_WIDTH)
+  {
+    panel_width = OVERLAY_DEBUG_CONSOLE_MAX_WIDTH;
+  }
+  if (panel_width < OVERLAY_DEBUG_CONSOLE_MIN_WIDTH)
+  {
+    return 0;
+  }
+
+  if (out_left != NULL)
+  {
+    *out_left = left;
+  }
+  if (out_top != NULL)
+  {
+    *out_top = top;
+  }
+  if (out_right != NULL)
+  {
+    *out_right = left + panel_width;
+  }
+  if (out_bottom != NULL)
+  {
+    *out_bottom = bottom;
+  }
+  return 1;
+}
+
+static inline int overlay_get_debug_console_log_view_rect(
+  int window_width,
+  int window_height,
+  int overlay_visible_width,
+  int* out_left,
+  int* out_top,
+  int* out_right,
+  int* out_bottom)
+{
+  int panel_left = 0;
+  int panel_top = 0;
+  int panel_right = 0;
+  int panel_bottom = 0;
+  int left = 0;
+  int top = 0;
+  int right = 0;
+  int bottom = 0;
+
+  if (!overlay_get_debug_console_rect(
+    window_width,
+    window_height,
+    overlay_visible_width,
+    &panel_left,
+    &panel_top,
+    &panel_right,
+      &panel_bottom))
+  {
+    return 0;
+  }
+
+  left = panel_left + OVERLAY_DEBUG_CONSOLE_PADDING_X;
+  top =
+    panel_top +
+    OVERLAY_DEBUG_CONSOLE_HEADER_HEIGHT +
+    OVERLAY_DEBUG_CONSOLE_PADDING_Y +
+    OVERLAY_DEBUG_CONSOLE_PINNED_ROW_COUNT * OVERLAY_DEBUG_CONSOLE_ROW_HEIGHT +
+    OVERLAY_DEBUG_CONSOLE_SECTION_GAP;
+  right = panel_right - OVERLAY_DEBUG_CONSOLE_PADDING_X - OVERLAY_DEBUG_CONSOLE_SCROLLBAR_WIDTH - 6;
+  bottom = panel_bottom - OVERLAY_DEBUG_CONSOLE_PADDING_Y;
+
+  if (right <= left || bottom <= top)
+  {
+    return 0;
+  }
+
+  if (out_left != NULL)
+  {
+    *out_left = left;
+  }
+  if (out_top != NULL)
+  {
+    *out_top = top;
+  }
+  if (out_right != NULL)
+  {
+    *out_right = right;
+  }
+  if (out_bottom != NULL)
+  {
+    *out_bottom = bottom;
+  }
+  return 1;
+}
+
+static inline float overlay_get_debug_console_log_scroll_max(
+  int window_width,
+  int window_height,
+  int overlay_visible_width,
+  int log_row_count)
+{
+  int view_top = 0;
+  int view_bottom = 0;
+  int visible_row_capacity = 0;
+  int overflow_row_count = 0;
+
+  if (log_row_count <= 0 ||
+    !overlay_get_debug_console_log_view_rect(
+      window_width,
+      window_height,
+      overlay_visible_width,
+      NULL,
+      &view_top,
+      NULL,
+      &view_bottom))
+  {
+    return 0.0f;
+  }
+
+  visible_row_capacity = (view_bottom - view_top) / OVERLAY_DEBUG_CONSOLE_ROW_HEIGHT;
+  overflow_row_count = log_row_count - visible_row_capacity;
+  return (overflow_row_count > 0) ? (float)(overflow_row_count * OVERLAY_DEBUG_CONSOLE_ROW_HEIGHT) : 0.0f;
 }
 
 static inline int overlay_get_gpu_selector_rect(

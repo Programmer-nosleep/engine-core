@@ -25,6 +25,63 @@
       }
     },
     {
+      "name": "windows-gnu-base",
+      "hidden": true,
+      "generator": "Unix Makefiles",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      }
+    },
+    {
+      "name": "windows-gcc-base",
+      "hidden": true,
+      "inherits": "windows-gnu-base",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "gcc"
+      }
+    },
+    {
+      "name": "windows-clang-base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "CMAKE_C_COMPILER": "clang"
+      },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      }
+    },
+    {
+      "name": "emscripten-base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "environment": {
+        "EMSDK": "C:/emsdk",
+        "PATH": "$penv{PATH};C:/emsdk;C:/emsdk/upstream/emscripten"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_TOOLCHAIN_FILE": "$env{EMSDK}/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      }
+    },
+    {
       "name": "windows-msvc-debug",
       "displayName": "Windows MSVC Debug",
       "description": "Use the Visual Studio 18 2026 generator with the MSVC x64 toolchain.",
@@ -35,6 +92,48 @@
       "displayName": "Windows MSVC Release",
       "description": "Use the Visual Studio 18 2026 generator with the MSVC x64 toolchain.",
       "inherits": "windows-msvc-base"
+    },
+    {
+      "name": "windows-gcc-debug",
+      "displayName": "Windows GCC Debug",
+      "description": "Use Unix Makefiles with gcc and a Debug single-config build.",
+      "inherits": "windows-gcc-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "windows-gcc-release",
+      "displayName": "Windows GCC Release",
+      "description": "Use Unix Makefiles with gcc and a Release single-config build.",
+      "inherits": "windows-gcc-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "windows-clang-debug",
+      "displayName": "Windows Clang Debug",
+      "description": "Use Ninja with clang and a Debug single-config build.",
+      "inherits": "windows-clang-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "windows-clang-release",
+      "displayName": "Windows Clang Release",
+      "description": "Use Ninja with clang and a Release single-config build.",
+      "inherits": "windows-clang-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "emscripten-wasm",
+      "displayName": "Emscripten WASM",
+      "description": "Build the standalone engine-core WebAssembly module without Emscripten JS glue.",
+      "inherits": "emscripten-base"
     }
   ],
   "buildPresets": [
@@ -47,6 +146,26 @@
       "name": "windows-msvc-release",
       "configurePreset": "windows-msvc-release",
       "configuration": "Release"
+    },
+    {
+      "name": "windows-gcc-debug",
+      "configurePreset": "windows-gcc-debug"
+    },
+    {
+      "name": "windows-gcc-release",
+      "configurePreset": "windows-gcc-release"
+    },
+    {
+      "name": "windows-clang-debug",
+      "configurePreset": "windows-clang-debug"
+    },
+    {
+      "name": "windows-clang-release",
+      "configurePreset": "windows-clang-release"
+    },
+    {
+      "name": "emscripten-wasm",
+      "configurePreset": "emscripten-wasm"
     }
   ]
 }

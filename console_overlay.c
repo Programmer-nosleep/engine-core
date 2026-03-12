@@ -188,7 +188,7 @@ void console_overlay_render(ConsoleOverlay* overlay, int width, int height, cons
 {
   const OverlayState fallback_overlay = {
     .settings = { 149.6f, 82.8f, 180.0f, 0.5f, 65.0f, 0.42f, 0.62f, 1.0f, -14.0f, 1.0f, 1.0f, 1.0f, 1.0f, 24.0f, 0.55f, 260.0f, 1 },
-    .metrics = { 149.6f, 90.0f, 90.0f, 60.0f, 16.6f, 0.0f, 0.0f, 0.0f, 1, 1, 0, 0, 0U },
+    .metrics = { 149.6f, 90.0f, 90.0f, 60.0f, 16.6f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1, 1, 0, 0, 0U },
     .panel_width = OVERLAY_UI_DEFAULT_WIDTH,
     .panel_collapsed = 0,
     .mouse_x = 0,

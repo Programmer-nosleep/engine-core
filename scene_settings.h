@@ -32,6 +32,9 @@ typedef struct OverlayMetrics
   float cpu_usage_percent;
   float gpu0_usage_percent;
   float gpu1_usage_percent;
+  float player_position_x;
+  float player_position_y;
+  float player_position_z;
   int player_mode;
   int selected_block_type;
   int placed_block_count;

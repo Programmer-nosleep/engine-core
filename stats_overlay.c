@@ -139,7 +139,7 @@ void stats_overlay_render(StatsOverlay* overlay, int width, int height, const Ov
 {
   const OverlayState fallback_overlay = {
     .settings = { 149.6f, 180.0f, 0.5f, 65.0f, 0.42f, 0.62f, 1.0f, -14.0f, 1.0f, 1.0f, 1.0f, 1 },
-    .metrics = { 149.6f, 90.0f, 90.0f, 60.0f, 16.6f, 0.0f, 0.0f, 0.0f, 1, 1, 0, 0, 0U },
+    .metrics = { 149.6f, 90.0f, 90.0f, 60.0f, 16.6f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1, 1, 0, 0, 0U },
     .panel_width = OVERLAY_UI_DEFAULT_WIDTH,
     .mouse_x = 0,
     .mouse_y = 0,
@@ -691,18 +691,23 @@ static void stats_overlay_draw_debug_console(const StatsOverlay* overlay, int wi
 {
   const int recent_count = diagnostics_get_recent_message_count();
   const int visible_count = (recent_count > 8) ? 8 : recent_count;
+  const int coord_line_count = 2;
   const int visible_width = overlay_get_visible_width_for_state(state->panel_width, state->panel_collapsed);
   const float panel_left = (float)visible_width + 16.0f;
   const float panel_right_limit = (float)width - 334.0f;
   const float panel_width = fminf(560.0f, panel_right_limit - panel_left);
   const float line_height = 14.0f;
-  const float panel_height = 48.0f + (float)((visible_count > 0) ? visible_count : 1) * line_height;
+  const float panel_height = 48.0f + (float)(coord_line_count + ((visible_count > 0) ? visible_count : 1)) * line_height;
   const float panel_bottom = (float)height - 16.0f;
   const float panel_top = panel_bottom - panel_height;
   const float panel_right = panel_left + panel_width;
   const float content_left = panel_left + 12.0f;
   const float content_right = panel_right - 12.0f;
   const int max_characters = (int)((content_right - content_left) / 7.0f);
+  const int player_cell_x = (int)floorf(state->metrics.player_position_x);
+  const int player_cell_y = (int)floorf(state->metrics.player_position_y);
+  const int player_cell_z = (int)floorf(state->metrics.player_position_z);
+  const float diagnostics_top = panel_top + 42.0f + (float)coord_line_count * line_height;
   int message_index = 0;
   int first_visible_index = 0;
   char line_buffer[224] = { 0 };
@@ -717,13 +722,49 @@ static void stats_overlay_draw_debug_console(const StatsOverlay* overlay, int wi
   stats_overlay_draw_outline(panel_left + 0.5f, panel_top + 0.5f, panel_right - 0.5f, panel_bottom - 0.5f, 0.48f, 0.56f, 0.66f, 0.28f);
   stats_overlay_draw_text_shadow(overlay, overlay->large_font_base, panel_left + 12.0f, panel_top + 20.0f, 0.92f, 0.94f, 0.98f, 0.96f, "DEBUG CONSOLE");
 
+  (void)snprintf(
+    line_buffer,
+    sizeof(line_buffer),
+    "POS  X %.2f  Y %.2f  Z %.2f",
+    state->metrics.player_position_x,
+    state->metrics.player_position_y,
+    state->metrics.player_position_z);
+  stats_overlay_draw_text_shadow(
+    overlay,
+    overlay->small_font_base,
+    content_left,
+    panel_top + 42.0f,
+    0.80f,
+    0.94f,
+    0.86f,
+    0.96f,
+    line_buffer);
+
+  (void)snprintf(
+    line_buffer,
+    sizeof(line_buffer),
+    "CELL X %d  Y %d  Z %d",
+    player_cell_x,
+    player_cell_y,
+    player_cell_z);
+  stats_overlay_draw_text_shadow(
+    overlay,
+    overlay->small_font_base,
+    content_left,
+    panel_top + 42.0f + line_height,
+    0.74f,
+    0.82f,
+    0.96f,
+    0.94f,
+    line_buffer);
+
   if (visible_count <= 0)
   {
     stats_overlay_draw_text_shadow(
       overlay,
       overlay->small_font_base,
       content_left,
-      panel_top + 42.0f,
+      diagnostics_top,
       0.74f,
       0.80f,
       0.88f,
@@ -736,7 +777,7 @@ static void stats_overlay_draw_debug_console(const StatsOverlay* overlay, int wi
   for (message_index = 0; message_index < visible_count; ++message_index)
   {
     const char* message = diagnostics_get_recent_message(first_visible_index + message_index);
-    const float y = panel_top + 42.0f + (float)message_index * line_height;
+    const float y = diagnostics_top + (float)message_index * line_height;
     const float fade = 0.72f + 0.28f * ((float)(message_index + 1) / (float)visible_count);
 
     stats_overlay_copy_text_fit(line_buffer, sizeof(line_buffer), message, max_characters);
