@@ -2298,7 +2298,7 @@ static int palm_render_populate_tree_instances(
   ProceduralLodState lod_state;
   const GLsizei max_vertex_count = palm_render_get_max_vertex_count_for_category(mesh, PALM_RENDER_CATEGORY_TREE);
   const float tree_density_scale =
-    (quality != NULL) ? palm_render_clamp(quality->tree_density_scale, 0.35f, 1.0f) : 1.0f;
+    (quality != NULL) ? palm_render_clamp(quality->tree_density_scale, 0.25f, 1.0f) : 1.0f;
   float radius = 0.0f;
   int effective_tree_target = 0;
   float cell_size = 0.0f;
@@ -2452,7 +2452,7 @@ static int palm_render_populate_grass_instances(
   ProceduralLodState lod_state;
   const GLsizei max_vertex_count = palm_render_get_max_vertex_count_for_category(mesh, PALM_RENDER_CATEGORY_GRASS);
   const float grass_density_scale =
-    (quality != NULL) ? palm_render_clamp(quality->grass_density_scale, 0.25f, 1.0f) : 1.0f;
+    (quality != NULL) ? palm_render_clamp(quality->grass_density_scale, 0.10f, 1.0f) : 1.0f;
   float radius = 0.0f;
   int effective_grass_target = 0;
   float cell_size = 0.0f;
@@ -2608,7 +2608,8 @@ static int palm_render_populate_mountain_instances(
   const RendererQualityProfile* quality)
 {
   const GLsizei max_vertex_count = palm_render_get_max_vertex_count_for_category(mesh, PALM_RENDER_CATEGORY_MOUNTAIN);
-  const int mountain_count = 14;
+  const float render_scale = (quality != NULL) ? quality->render_scale : 1.0f;
+  const int mountain_count = (render_scale <= 0.62f) ? 8 : ((render_scale <= 0.74f) ? 10 : 14);
   const float terrain_step = palm_render_get_terrain_step_for_quality(quality);
   const float ring_radius = k_palm_render_terrain_half_extent + 420.0f;
   float center_x = 0.0f;

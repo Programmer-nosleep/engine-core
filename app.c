@@ -51,6 +51,7 @@ int app_run(void)
     return 1;
   }
 
+  app_apply_renderer_quality_defaults(&app);
   system_monitor_create(&app.system_monitor);
   platform_set_scene_settings(&app.platform, &app.scene_settings);
   renderer_sync_terrain_render_sampling(&app.renderer, &app.player.camera);
@@ -260,6 +261,39 @@ int app_run(void)
   platform_destroy(&app.platform);
   diagnostics_log("app_run: shutdown complete");
   return 0;
+}
+
+static void app_apply_renderer_quality_defaults(AppState* app)
+{
+  if (app == NULL)
+  {
+    return;
+  }
+
+  if (app->renderer.quality.render_scale <= 0.60f)
+  {
+    int changed = 0;
+
+    if (app->scene_settings.clouds_enabled != 0)
+    {
+      app->scene_settings.clouds_enabled = 0;
+      changed = 1;
+    }
+    if (app->scene_settings.palm_render_radius > 96.0f)
+    {
+      app->scene_settings.palm_render_radius = 96.0f;
+      changed = 1;
+    }
+
+    if (changed != 0)
+    {
+      diagnostics_logf(
+        "app_run: applied low-end gpu defaults quality=%s clouds=%d palm_radius=%.1f",
+        (app->renderer.quality.name != NULL) ? app->renderer.quality.name : "unknown",
+        app->scene_settings.clouds_enabled,
+        app->scene_settings.palm_render_radius);
+    }
+  }
 }
 
 static float app_wrap_unit_interval(float value)

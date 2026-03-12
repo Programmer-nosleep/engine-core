@@ -8,6 +8,7 @@
 static int render_quality_contains_case_insensitive(const char* text, const char* needle);
 static unsigned int render_quality_query_dedicated_memory_mb(const char* renderer_name, const char* vendor_name);
 static int render_quality_is_vendor_match(const char* adapter_name, const char* vendor_name);
+static int render_quality_is_ultra_low_end_intel(const char* renderer_name, const char* vendor_name);
 
 RendererQualityProfile render_quality_pick(const char* renderer_name, const char* vendor_name)
 {
@@ -25,11 +26,30 @@ RendererQualityProfile render_quality_pick(const char* renderer_name, const char
     1,
     1,
     1,
+    1,
     1.0f,
     1.0f
   };
 
-  if (render_quality_contains_case_insensitive(renderer_name, "intel") ||
+  if (render_quality_is_ultra_low_end_intel(renderer_name, vendor_name))
+  {
+    profile.name = "UHD 617";
+    profile.render_scale = 0.60f;
+    profile.trace_distance_scale = 0.24f;
+    profile.shadow_extent = 112.0f;
+    profile.shadow_map_size = 512;
+    profile.terrain_resolution = 161;
+    profile.shadow_terrain_resolution = 0;
+    profile.enable_raytrace = 0;
+    profile.enable_pathtrace = 0;
+    profile.enable_post_ao = 0;
+    profile.enable_full_clouds = 0;
+    profile.shadow_update_interval = 5;
+    profile.enable_grass_shadows = 0;
+    profile.tree_density_scale = 0.42f;
+    profile.grass_density_scale = 0.18f;
+  }
+  else if (render_quality_contains_case_insensitive(renderer_name, "intel") ||
     render_quality_contains_case_insensitive(renderer_name, "iris") ||
     render_quality_contains_case_insensitive(renderer_name, "uhd") ||
     render_quality_contains_case_insensitive(vendor_name, "intel"))
@@ -70,6 +90,25 @@ RendererQualityProfile render_quality_pick(const char* renderer_name, const char
   }
 
   return profile;
+}
+
+static int render_quality_is_ultra_low_end_intel(const char* renderer_name, const char* vendor_name)
+{
+  const int is_intel =
+    render_quality_contains_case_insensitive(renderer_name, "intel") ||
+    render_quality_contains_case_insensitive(renderer_name, "iris") ||
+    render_quality_contains_case_insensitive(renderer_name, "uhd") ||
+    render_quality_contains_case_insensitive(vendor_name, "intel");
+
+  if (!is_intel || renderer_name == NULL)
+  {
+    return 0;
+  }
+
+  return render_quality_contains_case_insensitive(renderer_name, "uhd graphics 617") ||
+    render_quality_contains_case_insensitive(renderer_name, "uhd 617") ||
+    render_quality_contains_case_insensitive(renderer_name, "hd graphics 615") ||
+    render_quality_contains_case_insensitive(renderer_name, "hd graphics 617");
 }
 
 static int render_quality_contains_case_insensitive(const char* text, const char* needle)

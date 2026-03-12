@@ -36,7 +36,14 @@ enum
   PLATFORM_KEYCODE_LEFT_ARROW = 123,
   PLATFORM_KEYCODE_RIGHT_ARROW = 124,
   PLATFORM_KEYCODE_DOWN_ARROW = 125,
-  PLATFORM_KEYCODE_UP_ARROW = 126
+  PLATFORM_KEYCODE_UP_ARROW = 126,
+  PLATFORM_SETTINGS_TOGGLE_TAG_BASE = 2000,
+  PLATFORM_SETTINGS_SLIDER_TAG_BASE = 3000,
+  PLATFORM_SETTINGS_SLIDER_VALUE_TAG_BASE = 4000,
+  PLATFORM_SETTINGS_GPU_SEGMENTED_TAG = 5000,
+  PLATFORM_SETTINGS_GPU_STATUS_TAG = 5001,
+  PLATFORM_SETTINGS_TITLE_TAG = 5002,
+  PLATFORM_SETTINGS_HINT_TAG = 5003
 };
 
 @interface PlatformOpenGLView : NSOpenGLView
@@ -63,6 +70,20 @@ enum
 }
 @end
 
+@interface PlatformSettingsActionTarget : NSObject
+{
+@public
+  PlatformApp* app;
+}
+- (void)handleSliderChanged:(id)sender;
+- (void)handleToggleChanged:(id)sender;
+- (void)handleGpuModeChanged:(id)sender;
+@end
+
+static void platform_set_slider_setting_value(SceneSettings* settings, OverlaySliderId slider_id, float value);
+static void platform_toggle_value(PlatformApp* app, OverlayToggleId toggle_id);
+static void platform_sync_native_settings_controls(PlatformApp* app);
+
 @implementation PlatformWindowDelegate
 
 - (BOOL)windowShouldClose:(id)sender
@@ -77,6 +98,71 @@ enum
 
 @end
 
+@implementation PlatformSettingsActionTarget
+
+- (void)handleSliderChanged:(id)sender
+{
+  NSSlider* slider = (NSSlider*)sender;
+  OverlaySliderId slider_id = OVERLAY_SLIDER_NONE;
+
+  if (app == NULL || slider == nil)
+  {
+    return;
+  }
+
+  slider_id = (OverlaySliderId)([slider tag] - PLATFORM_SETTINGS_SLIDER_TAG_BASE);
+  if (slider_id <= OVERLAY_SLIDER_NONE || slider_id >= OVERLAY_SLIDER_COUNT)
+  {
+    return;
+  }
+
+  platform_set_slider_setting_value(&app->overlay.settings, slider_id, (float)[slider doubleValue]);
+  if (slider_id == OVERLAY_SLIDER_SUN_ORBIT)
+  {
+    app->overlay.freeze_time_enabled = 1;
+  }
+  platform_sync_native_settings_controls(app);
+}
+
+- (void)handleToggleChanged:(id)sender
+{
+  NSButton* button = (NSButton*)sender;
+  OverlayToggleId toggle_id = OVERLAY_TOGGLE_NONE;
+
+  if (app == NULL || button == nil)
+  {
+    return;
+  }
+
+  toggle_id = (OverlayToggleId)([button tag] - PLATFORM_SETTINGS_TOGGLE_TAG_BASE);
+  platform_toggle_value(app, toggle_id);
+  platform_sync_native_settings_controls(app);
+}
+
+- (void)handleGpuModeChanged:(id)sender
+{
+  NSSegmentedControl* segmented = (NSSegmentedControl*)sender;
+  NSInteger selected_segment = 0;
+
+  if (app == NULL || segmented == nil)
+  {
+    return;
+  }
+
+  selected_segment = [segmented selectedSegment];
+  if (selected_segment < GPU_PREFERENCE_MODE_AUTO || selected_segment >= GPU_PREFERENCE_MODE_COUNT)
+  {
+    return;
+  }
+
+  app->gpu_switch_requested = 1;
+  app->requested_gpu_preference = (GpuPreferenceMode)selected_segment;
+  app->overlay.gpu_info.selected_mode = app->requested_gpu_preference;
+  platform_sync_native_settings_controls(app);
+}
+
+@end
+
 static int platform_window_has_focus(const PlatformApp* app);
 static int platform_is_key_down(const PlatformApp* app, unsigned short key_code);
 static void platform_sync_modifier_keys(PlatformApp* app, NSEventModifierFlags modifier_flags);
@@ -84,8 +170,19 @@ static void platform_set_mouse_capture(PlatformApp* app, int enabled);
 static void platform_toggle_fullscreen(PlatformApp* app);
 static void platform_update_dimensions(PlatformApp* app);
 static NSTextView* platform_create_overlay_text_view(NSFont* font, NSColor* text_color, NSColor* background_color);
+static NSTextField* platform_create_overlay_label(NSString* text, NSFont* font, NSColor* text_color, NSTextAlignment alignment);
+static NSFont* platform_font_named_or(NSString* name, CGFloat size, NSFont* fallback);
+static NSView* platform_create_settings_overlay(PlatformApp* app);
 static void platform_layout_native_overlays(PlatformApp* app);
 static void platform_update_native_overlays(PlatformApp* app);
+static void platform_sync_native_overlay_visibility(PlatformApp* app);
+static void platform_sync_native_settings_controls(PlatformApp* app);
+static float platform_get_slider_setting_value(const SceneSettings* settings, OverlaySliderId slider_id);
+static void platform_set_slider_setting_value(SceneSettings* settings, OverlaySliderId slider_id, float value);
+static void platform_format_slider_setting_value(char* buffer, size_t buffer_size, OverlaySliderId slider_id, float value);
+static void platform_toggle_value(PlatformApp* app, OverlayToggleId toggle_id);
+static int platform_point_in_view(NSView* view, NSPoint point_in_window);
+static int platform_try_enter_world_from_mouse_down(PlatformApp* app, NSEvent* event);
 
 static int platform_window_has_focus(const PlatformApp* app)
 {
@@ -243,14 +340,599 @@ static NSTextView* platform_create_overlay_text_view(NSFont* font, NSColor* text
   return text_view;
 }
 
+static NSTextField* platform_create_overlay_label(NSString* text, NSFont* font, NSColor* text_color, NSTextAlignment alignment)
+{
+  NSTextField* label = [NSTextField labelWithString:(text != nil) ? text : @""];
+
+  if (label == nil)
+  {
+    return nil;
+  }
+
+  [label setFont:font];
+  [label setTextColor:text_color];
+  [label setAlignment:alignment];
+  [label setLineBreakMode:NSLineBreakByTruncatingTail];
+  [label setEditable:NO];
+  [label setSelectable:NO];
+  [label setBezeled:NO];
+  [label setBordered:NO];
+  [label setDrawsBackground:NO];
+  return label;
+}
+
+static NSFont* platform_font_named_or(NSString* name, CGFloat size, NSFont* fallback)
+{
+  NSFont* font = [NSFont fontWithName:name size:size];
+  return (font != nil) ? font : fallback;
+}
+
+static float platform_get_slider_setting_value(const SceneSettings* settings, OverlaySliderId slider_id)
+{
+  if (settings == NULL)
+  {
+    return 0.0f;
+  }
+
+  switch (slider_id)
+  {
+    case OVERLAY_SLIDER_SUN_DISTANCE:
+      return settings->sun_distance_mkm;
+    case OVERLAY_SLIDER_SUN_ORBIT:
+      return settings->sun_orbit_degrees;
+    case OVERLAY_SLIDER_CYCLE_DURATION:
+      return settings->cycle_duration_seconds;
+    case OVERLAY_SLIDER_DAYLIGHT_FRACTION:
+      return settings->daylight_fraction;
+    case OVERLAY_SLIDER_CAMERA_FOV:
+      return settings->camera_fov_degrees;
+    case OVERLAY_SLIDER_FOG_DENSITY:
+      return settings->fog_density;
+    case OVERLAY_SLIDER_CLOUD_AMOUNT:
+      return settings->cloud_amount;
+    case OVERLAY_SLIDER_CLOUD_SPACING:
+      return settings->cloud_spacing;
+    case OVERLAY_SLIDER_TERRAIN_BASE:
+      return settings->terrain_base_height;
+    case OVERLAY_SLIDER_TERRAIN_HEIGHT:
+      return settings->terrain_height_scale;
+    case OVERLAY_SLIDER_TERRAIN_ROUGHNESS:
+      return settings->terrain_roughness;
+    case OVERLAY_SLIDER_TERRAIN_RIDGE:
+      return settings->terrain_ridge_strength;
+    case OVERLAY_SLIDER_PALM_SIZE:
+      return settings->palm_size;
+    case OVERLAY_SLIDER_PALM_COUNT:
+      return settings->palm_count;
+    case OVERLAY_SLIDER_PALM_FRUIT_DENSITY:
+      return settings->palm_fruit_density;
+    case OVERLAY_SLIDER_PALM_RENDER_RADIUS:
+      return settings->palm_render_radius;
+    case OVERLAY_SLIDER_NONE:
+    case OVERLAY_SLIDER_COUNT:
+    default:
+      return 0.0f;
+  }
+}
+
+static void platform_set_slider_setting_value(SceneSettings* settings, OverlaySliderId slider_id, float value)
+{
+  if (settings == NULL)
+  {
+    return;
+  }
+
+  switch (slider_id)
+  {
+    case OVERLAY_SLIDER_SUN_DISTANCE:
+      settings->sun_distance_mkm = value;
+      break;
+    case OVERLAY_SLIDER_SUN_ORBIT:
+      settings->sun_orbit_degrees = value;
+      break;
+    case OVERLAY_SLIDER_CYCLE_DURATION:
+      settings->cycle_duration_seconds = value;
+      break;
+    case OVERLAY_SLIDER_DAYLIGHT_FRACTION:
+      settings->daylight_fraction = value;
+      break;
+    case OVERLAY_SLIDER_CAMERA_FOV:
+      settings->camera_fov_degrees = value;
+      break;
+    case OVERLAY_SLIDER_FOG_DENSITY:
+      settings->fog_density = value;
+      break;
+    case OVERLAY_SLIDER_CLOUD_AMOUNT:
+      settings->cloud_amount = value;
+      break;
+    case OVERLAY_SLIDER_CLOUD_SPACING:
+      settings->cloud_spacing = value;
+      break;
+    case OVERLAY_SLIDER_TERRAIN_BASE:
+      settings->terrain_base_height = value;
+      break;
+    case OVERLAY_SLIDER_TERRAIN_HEIGHT:
+      settings->terrain_height_scale = value;
+      break;
+    case OVERLAY_SLIDER_TERRAIN_ROUGHNESS:
+      settings->terrain_roughness = value;
+      break;
+    case OVERLAY_SLIDER_TERRAIN_RIDGE:
+      settings->terrain_ridge_strength = value;
+      break;
+    case OVERLAY_SLIDER_PALM_SIZE:
+      settings->palm_size = value;
+      break;
+    case OVERLAY_SLIDER_PALM_COUNT:
+      settings->palm_count = value;
+      break;
+    case OVERLAY_SLIDER_PALM_FRUIT_DENSITY:
+      settings->palm_fruit_density = value;
+      break;
+    case OVERLAY_SLIDER_PALM_RENDER_RADIUS:
+      settings->palm_render_radius = value;
+      break;
+    case OVERLAY_SLIDER_NONE:
+    case OVERLAY_SLIDER_COUNT:
+    default:
+      break;
+  }
+}
+
+static void platform_format_slider_setting_value(char* buffer, size_t buffer_size, OverlaySliderId slider_id, float value)
+{
+  if (buffer == NULL || buffer_size == 0U)
+  {
+    return;
+  }
+
+  switch (slider_id)
+  {
+    case OVERLAY_SLIDER_SUN_DISTANCE:
+      (void)snprintf(buffer, buffer_size, "%.1f Mkm", value);
+      break;
+    case OVERLAY_SLIDER_SUN_ORBIT:
+      (void)snprintf(buffer, buffer_size, "%.0f deg", value);
+      break;
+    case OVERLAY_SLIDER_CYCLE_DURATION:
+      (void)snprintf(buffer, buffer_size, "%.0f s", value);
+      break;
+    case OVERLAY_SLIDER_DAYLIGHT_FRACTION:
+      (void)snprintf(buffer, buffer_size, "%.0f%%", value * 100.0f);
+      break;
+    case OVERLAY_SLIDER_CAMERA_FOV:
+      (void)snprintf(buffer, buffer_size, "%.0f deg", value);
+      break;
+    case OVERLAY_SLIDER_FOG_DENSITY:
+      (void)snprintf(buffer, buffer_size, "%.0f%%", value * 100.0f);
+      break;
+    case OVERLAY_SLIDER_CLOUD_AMOUNT:
+      (void)snprintf(buffer, buffer_size, "%.0f%%", value * 100.0f);
+      break;
+    case OVERLAY_SLIDER_CLOUD_SPACING:
+      (void)snprintf(buffer, buffer_size, "%.2fx", value);
+      break;
+    case OVERLAY_SLIDER_TERRAIN_BASE:
+      (void)snprintf(buffer, buffer_size, "%.1f m", value);
+      break;
+    case OVERLAY_SLIDER_TERRAIN_HEIGHT:
+    case OVERLAY_SLIDER_TERRAIN_ROUGHNESS:
+    case OVERLAY_SLIDER_TERRAIN_RIDGE:
+    case OVERLAY_SLIDER_PALM_SIZE:
+      (void)snprintf(buffer, buffer_size, "%.2fx", value);
+      break;
+    case OVERLAY_SLIDER_PALM_COUNT:
+      (void)snprintf(buffer, buffer_size, "%.0f trees", value);
+      break;
+    case OVERLAY_SLIDER_PALM_FRUIT_DENSITY:
+      (void)snprintf(buffer, buffer_size, "%.0f%%", value * 100.0f);
+      break;
+    case OVERLAY_SLIDER_PALM_RENDER_RADIUS:
+      (void)snprintf(buffer, buffer_size, "%.0f m", value);
+      break;
+    case OVERLAY_SLIDER_NONE:
+    case OVERLAY_SLIDER_COUNT:
+    default:
+      buffer[0] = '\0';
+      break;
+  }
+}
+
+static void platform_toggle_value(PlatformApp* app, OverlayToggleId toggle_id)
+{
+  if (app == NULL)
+  {
+    return;
+  }
+
+  switch (toggle_id)
+  {
+    case OVERLAY_TOGGLE_GOD_MODE:
+      app->overlay.god_mode_enabled = (app->overlay.god_mode_enabled == 0);
+      break;
+    case OVERLAY_TOGGLE_FREEZE_TIME:
+      app->overlay.freeze_time_enabled = (app->overlay.freeze_time_enabled == 0);
+      break;
+    case OVERLAY_TOGGLE_CLOUDS:
+      app->overlay.settings.clouds_enabled = (app->overlay.settings.clouds_enabled == 0);
+      break;
+    case OVERLAY_TOGGLE_NONE:
+    case OVERLAY_TOGGLE_COUNT:
+    default:
+      break;
+  }
+}
+
+static NSView* platform_create_settings_overlay(PlatformApp* app)
+{
+  static const OverlayToggleId k_toggle_ids[] = {
+    OVERLAY_TOGGLE_GOD_MODE,
+    OVERLAY_TOGGLE_FREEZE_TIME,
+    OVERLAY_TOGGLE_CLOUDS
+  };
+  static const OverlaySliderId k_slider_ids[] = {
+    OVERLAY_SLIDER_SUN_DISTANCE,
+    OVERLAY_SLIDER_SUN_ORBIT,
+    OVERLAY_SLIDER_CYCLE_DURATION,
+    OVERLAY_SLIDER_DAYLIGHT_FRACTION,
+    OVERLAY_SLIDER_CAMERA_FOV,
+    OVERLAY_SLIDER_FOG_DENSITY,
+    OVERLAY_SLIDER_CLOUD_AMOUNT,
+    OVERLAY_SLIDER_CLOUD_SPACING,
+    OVERLAY_SLIDER_TERRAIN_BASE,
+    OVERLAY_SLIDER_TERRAIN_HEIGHT,
+    OVERLAY_SLIDER_TERRAIN_ROUGHNESS,
+    OVERLAY_SLIDER_TERRAIN_RIDGE,
+    OVERLAY_SLIDER_PALM_SIZE,
+    OVERLAY_SLIDER_PALM_COUNT,
+    OVERLAY_SLIDER_PALM_FRUIT_DENSITY,
+    OVERLAY_SLIDER_PALM_RENDER_RADIUS
+  };
+  NSVisualEffectView* panel = nil;
+  NSScrollView* scroll_view = nil;
+  NSView* form_view = nil;
+  NSTextField* title_label = nil;
+  NSTextField* hint_label = nil;
+  NSTextField* gpu_status_label = nil;
+  NSSegmentedControl* gpu_segmented = nil;
+  PlatformSettingsActionTarget* target = nil;
+  CGFloat content_width = 312.0;
+  CGFloat content_height = 0.0;
+  CGFloat y = 0.0;
+  size_t index = 0U;
+
+  if (app == NULL)
+  {
+    return nil;
+  }
+
+  panel = [[NSVisualEffectView alloc] initWithFrame:NSZeroRect];
+  if (panel == nil)
+  {
+    return nil;
+  }
+
+  [panel setMaterial:NSVisualEffectMaterialHUDWindow];
+  [panel setBlendingMode:NSVisualEffectBlendingModeWithinWindow];
+  [panel setState:NSVisualEffectStateActive];
+  [panel setWantsLayer:YES];
+  [[panel layer] setCornerRadius:16.0];
+  [[panel layer] setMasksToBounds:YES];
+  [panel setHidden:YES];
+
+  title_label = platform_create_overlay_label(
+    @"Settings",
+    platform_font_named_or(@"Menlo Bold", 15.0, [NSFont boldSystemFontOfSize:15.0]),
+    [NSColor colorWithCalibratedRed:0.96 green:0.97 blue:0.99 alpha:1.0],
+    NSTextAlignmentLeft);
+  [title_label setTag:PLATFORM_SETTINGS_TITLE_TAG];
+  [panel addSubview:title_label];
+
+  hint_label = platform_create_overlay_label(
+    @"Alt untuk buka settings, klik scene untuk kembali ke world",
+    platform_font_named_or(@"Menlo", 11.0, [NSFont systemFontOfSize:11.0]),
+    [NSColor colorWithCalibratedRed:0.74 green:0.78 blue:0.84 alpha:0.96],
+    NSTextAlignmentLeft);
+  [hint_label setTag:PLATFORM_SETTINGS_HINT_TAG];
+  [hint_label setLineBreakMode:NSLineBreakByWordWrapping];
+  [hint_label setUsesSingleLineMode:NO];
+  [panel addSubview:hint_label];
+
+  scroll_view = [[NSScrollView alloc] initWithFrame:NSZeroRect];
+  [scroll_view setHasVerticalScroller:YES];
+  [scroll_view setBorderType:NSNoBorder];
+  [scroll_view setDrawsBackground:NO];
+  [scroll_view setAutohidesScrollers:YES];
+  [panel addSubview:scroll_view];
+
+  target = [[PlatformSettingsActionTarget alloc] init];
+  target->app = app;
+  app->settings_action_target = target;
+
+  content_height = 40.0f + 3.0f * 30.0f + 88.0f + (CGFloat)(sizeof(k_slider_ids) / sizeof(k_slider_ids[0])) * 60.0f + 36.0f;
+  form_view = [[NSView alloc] initWithFrame:NSMakeRect(0.0, 0.0, content_width, content_height)];
+  [form_view setAutoresizingMask:NSViewWidthSizable];
+  [scroll_view setDocumentView:form_view];
+
+  y = content_height - 24.0f;
+  [form_view addSubview:platform_create_overlay_label(
+    @"Gameplay",
+    platform_font_named_or(@"Menlo Bold", 12.0, [NSFont boldSystemFontOfSize:12.0]),
+    [NSColor colorWithCalibratedRed:0.96 green:0.86 blue:0.52 alpha:0.98],
+    NSTextAlignmentLeft)];
+  [[[form_view subviews] lastObject] setFrame:NSMakeRect(0.0, y, content_width, 18.0)];
+  y -= 28.0f;
+
+  for (index = 0U; index < sizeof(k_toggle_ids) / sizeof(k_toggle_ids[0]); ++index)
+  {
+    NSButton* toggle = [[NSButton alloc] initWithFrame:NSMakeRect(0.0, y, content_width, 22.0)];
+    [toggle setButtonType:NSButtonTypeSwitch];
+    [toggle setTitle:[NSString stringWithUTF8String:overlay_get_toggle_title(k_toggle_ids[index])]];
+    [toggle setTarget:target];
+    [toggle setAction:@selector(handleToggleChanged:)];
+    [toggle setTag:PLATFORM_SETTINGS_TOGGLE_TAG_BASE + (NSInteger)k_toggle_ids[index]];
+    [toggle setFont:[NSFont systemFontOfSize:12.0]];
+    [form_view addSubview:toggle];
+    y -= 28.0f;
+  }
+
+  y -= 8.0f;
+  [form_view addSubview:platform_create_overlay_label(
+    @"GPU Preference",
+    platform_font_named_or(@"Menlo Bold", 12.0, [NSFont boldSystemFontOfSize:12.0]),
+    [NSColor colorWithCalibratedRed:0.82 green:0.90 blue:0.98 alpha:0.98],
+    NSTextAlignmentLeft)];
+  [[[form_view subviews] lastObject] setFrame:NSMakeRect(0.0, y, content_width, 18.0)];
+  y -= 30.0f;
+
+  gpu_segmented = [[NSSegmentedControl alloc] initWithFrame:NSMakeRect(0.0, y, content_width, 28.0)];
+  [gpu_segmented setSegmentCount:3];
+  [gpu_segmented setLabel:[NSString stringWithUTF8String:gpu_preferences_get_mode_short_label(GPU_PREFERENCE_MODE_AUTO)] forSegment:0];
+  [gpu_segmented setLabel:[NSString stringWithUTF8String:gpu_preferences_get_mode_short_label(GPU_PREFERENCE_MODE_MINIMUM_POWER)] forSegment:1];
+  [gpu_segmented setLabel:[NSString stringWithUTF8String:gpu_preferences_get_mode_short_label(GPU_PREFERENCE_MODE_HIGH_PERFORMANCE)] forSegment:2];
+  [gpu_segmented setTag:PLATFORM_SETTINGS_GPU_SEGMENTED_TAG];
+  [gpu_segmented setTarget:target];
+  [gpu_segmented setAction:@selector(handleGpuModeChanged:)];
+  [form_view addSubview:gpu_segmented];
+  y -= 40.0f;
+
+  gpu_status_label = platform_create_overlay_label(
+    @"",
+    platform_font_named_or(@"Menlo", 10.0, [NSFont systemFontOfSize:10.0]),
+    [NSColor colorWithCalibratedRed:0.72 green:0.76 blue:0.82 alpha:0.96],
+    NSTextAlignmentLeft);
+  [gpu_status_label setTag:PLATFORM_SETTINGS_GPU_STATUS_TAG];
+  [gpu_status_label setLineBreakMode:NSLineBreakByWordWrapping];
+  [gpu_status_label setUsesSingleLineMode:NO];
+  [gpu_status_label setFrame:NSMakeRect(0.0, y, content_width, 34.0)];
+  [form_view addSubview:gpu_status_label];
+  y -= 48.0f;
+
+  [form_view addSubview:platform_create_overlay_label(
+    @"World Settings",
+    platform_font_named_or(@"Menlo Bold", 12.0, [NSFont boldSystemFontOfSize:12.0]),
+    [NSColor colorWithCalibratedRed:0.86 green:0.94 blue:0.98 alpha:0.98],
+    NSTextAlignmentLeft)];
+  [[[form_view subviews] lastObject] setFrame:NSMakeRect(0.0, y, content_width, 18.0)];
+  y -= 30.0f;
+
+  for (index = 0U; index < sizeof(k_slider_ids) / sizeof(k_slider_ids[0]); ++index)
+  {
+    NSTextField* slider_label = platform_create_overlay_label(
+      [NSString stringWithUTF8String:overlay_get_slider_title(k_slider_ids[index])],
+      [NSFont systemFontOfSize:12.0],
+      [NSColor colorWithCalibratedRed:0.96 green:0.97 blue:0.99 alpha:0.98],
+      NSTextAlignmentLeft);
+    NSTextField* value_label = platform_create_overlay_label(
+      @"",
+      platform_font_named_or(@"Menlo", 11.0, [NSFont systemFontOfSize:11.0]),
+      [NSColor colorWithCalibratedRed:0.98 green:0.84 blue:0.58 alpha:0.98],
+      NSTextAlignmentRight);
+    NSSlider* slider = [[NSSlider alloc] initWithFrame:NSMakeRect(0.0, y - 24.0, content_width, 24.0)];
+    float min_value = 0.0f;
+    float max_value = 1.0f;
+
+    overlay_get_slider_range(k_slider_ids[index], &min_value, &max_value);
+    [slider_label setFrame:NSMakeRect(0.0, y, content_width - 92.0, 18.0)];
+    [value_label setFrame:NSMakeRect(content_width - 88.0, y, 88.0, 18.0)];
+    [value_label setTag:PLATFORM_SETTINGS_SLIDER_VALUE_TAG_BASE + (NSInteger)k_slider_ids[index]];
+    [slider setMinValue:min_value];
+    [slider setMaxValue:max_value];
+    [slider setContinuous:YES];
+    [slider setTarget:target];
+    [slider setAction:@selector(handleSliderChanged:)];
+    [slider setTag:PLATFORM_SETTINGS_SLIDER_TAG_BASE + (NSInteger)k_slider_ids[index]];
+    [slider setAutoresizingMask:NSViewWidthSizable];
+    [slider_label setAutoresizingMask:NSViewWidthSizable];
+    [value_label setAutoresizingMask:NSViewMinXMargin];
+    [form_view addSubview:slider_label];
+    [form_view addSubview:value_label];
+    [form_view addSubview:slider];
+    y -= 56.0f;
+  }
+
+  platform_sync_native_settings_controls(app);
+  return panel;
+}
+
+static void platform_sync_native_settings_controls(PlatformApp* app)
+{
+  static const OverlayToggleId k_toggle_ids[] = {
+    OVERLAY_TOGGLE_GOD_MODE,
+    OVERLAY_TOGGLE_FREEZE_TIME,
+    OVERLAY_TOGGLE_CLOUDS
+  };
+  static const OverlaySliderId k_slider_ids[] = {
+    OVERLAY_SLIDER_SUN_DISTANCE,
+    OVERLAY_SLIDER_SUN_ORBIT,
+    OVERLAY_SLIDER_CYCLE_DURATION,
+    OVERLAY_SLIDER_DAYLIGHT_FRACTION,
+    OVERLAY_SLIDER_CAMERA_FOV,
+    OVERLAY_SLIDER_FOG_DENSITY,
+    OVERLAY_SLIDER_CLOUD_AMOUNT,
+    OVERLAY_SLIDER_CLOUD_SPACING,
+    OVERLAY_SLIDER_TERRAIN_BASE,
+    OVERLAY_SLIDER_TERRAIN_HEIGHT,
+    OVERLAY_SLIDER_TERRAIN_ROUGHNESS,
+    OVERLAY_SLIDER_TERRAIN_RIDGE,
+    OVERLAY_SLIDER_PALM_SIZE,
+    OVERLAY_SLIDER_PALM_COUNT,
+    OVERLAY_SLIDER_PALM_FRUIT_DENSITY,
+    OVERLAY_SLIDER_PALM_RENDER_RADIUS
+  };
+  NSView* root = (NSView*)app->settings_overlay_view;
+  size_t index = 0U;
+
+  if (app == NULL || root == nil)
+  {
+    return;
+  }
+
+  for (index = 0U; index < sizeof(k_toggle_ids) / sizeof(k_toggle_ids[0]); ++index)
+  {
+    NSButton* toggle = (NSButton*)[root viewWithTag:PLATFORM_SETTINGS_TOGGLE_TAG_BASE + (NSInteger)k_toggle_ids[index]];
+    if (toggle == nil)
+    {
+      continue;
+    }
+
+    switch (k_toggle_ids[index])
+    {
+      case OVERLAY_TOGGLE_GOD_MODE:
+        [toggle setState:(app->overlay.god_mode_enabled != 0) ? NSControlStateValueOn : NSControlStateValueOff];
+        break;
+      case OVERLAY_TOGGLE_FREEZE_TIME:
+        [toggle setState:(app->overlay.freeze_time_enabled != 0) ? NSControlStateValueOn : NSControlStateValueOff];
+        break;
+      case OVERLAY_TOGGLE_CLOUDS:
+        [toggle setState:(app->overlay.settings.clouds_enabled != 0) ? NSControlStateValueOn : NSControlStateValueOff];
+        break;
+      case OVERLAY_TOGGLE_NONE:
+      case OVERLAY_TOGGLE_COUNT:
+      default:
+        break;
+    }
+  }
+
+  for (index = 0U; index < sizeof(k_slider_ids) / sizeof(k_slider_ids[0]); ++index)
+  {
+    NSSlider* slider = (NSSlider*)[root viewWithTag:PLATFORM_SETTINGS_SLIDER_TAG_BASE + (NSInteger)k_slider_ids[index]];
+    NSTextField* value_label = (NSTextField*)[root viewWithTag:PLATFORM_SETTINGS_SLIDER_VALUE_TAG_BASE + (NSInteger)k_slider_ids[index]];
+    char value_text[64] = { 0 };
+    float value = platform_get_slider_setting_value(&app->overlay.settings, k_slider_ids[index]);
+
+    if (slider != nil)
+    {
+      [slider setDoubleValue:value];
+    }
+    if (value_label != nil)
+    {
+      platform_format_slider_setting_value(value_text, sizeof(value_text), k_slider_ids[index], value);
+      [value_label setStringValue:[NSString stringWithUTF8String:value_text]];
+    }
+  }
+
+  {
+    NSSegmentedControl* gpu_segmented = (NSSegmentedControl*)[root viewWithTag:PLATFORM_SETTINGS_GPU_SEGMENTED_TAG];
+    NSTextField* gpu_status = (NSTextField*)[root viewWithTag:PLATFORM_SETTINGS_GPU_STATUS_TAG];
+    const char* status_text = (app->overlay.gpu_info.status_message[0] != '\0')
+      ? app->overlay.gpu_info.status_message
+      : "GPU routing selection is not available on this platform";
+
+    if (gpu_segmented != nil)
+    {
+      [gpu_segmented setSelectedSegment:(NSInteger)app->overlay.gpu_info.selected_mode];
+      [gpu_segmented setEnabled:app->overlay.gpu_info.available != 0];
+    }
+    if (gpu_status != nil)
+    {
+      [gpu_status setStringValue:[NSString stringWithUTF8String:status_text]];
+    }
+  }
+}
+
+static void platform_sync_native_overlay_visibility(PlatformApp* app)
+{
+  NSView* settings_view = nil;
+  const int overlay_visible = (app != NULL && app->cursor_mode_enabled != 0);
+
+  if (app == NULL)
+  {
+    return;
+  }
+
+  settings_view = (NSView*)app->settings_overlay_view;
+  if (settings_view != nil)
+  {
+    [settings_view setHidden:(overlay_visible == 0)];
+  }
+
+  app->overlay.cursor_mode_enabled = app->cursor_mode_enabled;
+  app->overlay.panel_width = overlay_visible ? overlay_get_panel_width_for_window(app->width) : 0;
+  app->overlay.panel_collapsed = overlay_visible ? 0 : 1;
+  app->overlay.scroll_offset = 0.0f;
+  app->overlay.scroll_max = 0.0f;
+  platform_layout_native_overlays(app);
+}
+
+static int platform_point_in_view(NSView* view, NSPoint point_in_window)
+{
+  NSPoint point_in_view = NSZeroPoint;
+
+  if (view == nil || [view isHidden] || [view window] == nil)
+  {
+    return 0;
+  }
+
+  point_in_view = [view convertPoint:point_in_window fromView:nil];
+  return NSPointInRect(point_in_view, [view bounds]) ? 1 : 0;
+}
+
+static int platform_try_enter_world_from_mouse_down(PlatformApp* app, NSEvent* event)
+{
+  NSWindow* window = nil;
+  NSView* settings_view = nil;
+
+  if (app == NULL || event == nil || app->cursor_mode_enabled == 0)
+  {
+    return 0;
+  }
+
+  settings_view = (NSView*)app->settings_overlay_view;
+  if (platform_point_in_view(settings_view, [event locationInWindow]))
+  {
+    return 0;
+  }
+
+  window = (NSWindow*)app->window;
+  app->cursor_mode_enabled = 0;
+  app->overlay.cursor_mode_enabled = 0;
+  app->overlay.active_slider = OVERLAY_SLIDER_NONE;
+  app->overlay.hot_slider = OVERLAY_SLIDER_NONE;
+  app->overlay.hot_toggle = OVERLAY_TOGGLE_NONE;
+  app->overlay.hot_gpu_preference = -1;
+  app->left_button_down = 0;
+  app->right_button_down = 0;
+  app->suppress_world_click_until_release = 1;
+  platform_sync_native_overlay_visibility(app);
+  if (window != nil && app->view != NULL)
+  {
+    [window makeFirstResponder:(NSView*)app->view];
+  }
+  platform_set_mouse_capture(app, 1);
+  return 1;
+}
+
 static void platform_layout_native_overlays(PlatformApp* app)
 {
   NSWindow* window = nil;
   NSView* content_view = nil;
+  NSView* settings_view = nil;
   NSTextView* stats_view = nil;
   NSTextView* debug_view = nil;
   NSRect bounds = NSZeroRect;
   const CGFloat margin = 12.0;
+  const CGFloat settings_width = (CGFloat)overlay_get_panel_width_for_window((app != NULL) ? app->width : 0);
   const CGFloat stats_width = 292.0;
   const CGFloat stats_height = 208.0;
   const CGFloat debug_width = 560.0;
@@ -263,6 +945,7 @@ static void platform_layout_native_overlays(PlatformApp* app)
 
   window = (NSWindow*)app->window;
   content_view = (window != nil) ? [window contentView] : nil;
+  settings_view = (NSView*)app->settings_overlay_view;
   stats_view = (NSTextView*)app->stats_overlay_view;
   debug_view = (NSTextView*)app->debug_overlay_view;
   if (content_view == nil)
@@ -274,6 +957,46 @@ static void platform_layout_native_overlays(PlatformApp* app)
   if ((NSView*)app->view != nil)
   {
     [(NSView*)app->view setFrame:bounds];
+  }
+
+  if (settings_view != nil)
+  {
+    NSTextField* title_label = (NSTextField*)[settings_view viewWithTag:PLATFORM_SETTINGS_TITLE_TAG];
+    NSTextField* hint_label = (NSTextField*)[settings_view viewWithTag:PLATFORM_SETTINGS_HINT_TAG];
+    NSScrollView* scroll_view = nil;
+    NSView* document_view = (scroll_view != nil) ? [scroll_view documentView] : nil;
+    const CGFloat panel_width = fmin(settings_width, fmax(280.0, bounds.size.width - margin * 2.0));
+    const CGFloat panel_height = fmax(220.0, bounds.size.height - margin * 2.0);
+
+    for (NSView* subview in [settings_view subviews])
+    {
+      if ([subview isKindOfClass:[NSScrollView class]])
+      {
+        scroll_view = (NSScrollView*)subview;
+        break;
+      }
+    }
+    document_view = (scroll_view != nil) ? [scroll_view documentView] : nil;
+
+    [settings_view setFrame:NSMakeRect(margin, margin, panel_width, panel_height)];
+    if (title_label != nil)
+    {
+      [title_label setFrame:NSMakeRect(16.0, panel_height - 32.0, panel_width - 32.0, 20.0)];
+    }
+    if (hint_label != nil)
+    {
+      [hint_label setFrame:NSMakeRect(16.0, panel_height - 58.0, panel_width - 32.0, 32.0)];
+    }
+    if (scroll_view != nil)
+    {
+      [scroll_view setFrame:NSMakeRect(16.0, 14.0, panel_width - 32.0, panel_height - 84.0)];
+    }
+    if (document_view != nil)
+    {
+      NSRect document_frame = [document_view frame];
+      document_frame.size.width = panel_width - 48.0;
+      [document_view setFrame:document_frame];
+    }
   }
 
   if (stats_view != nil)
@@ -399,6 +1122,7 @@ int platform_create(PlatformApp* app, const char* title, int width, int height)
     PlatformOpenGLView* view = nil;
     NSOpenGLContext* context = nil;
     PlatformWindowDelegate* delegate = nil;
+    NSView* settings_view = nil;
     NSTextView* stats_view = nil;
     NSTextView* debug_view = nil;
     NSFont* stats_font = nil;
@@ -517,15 +1241,6 @@ int platform_create(PlatformApp* app, const char* title, int width, int height)
       [NSColor colorWithCalibratedRed:0.92 green:0.95 blue:0.99 alpha:0.98],
       [NSColor colorWithCalibratedRed:0.03 green:0.03 blue:0.04 alpha:0.82]
     );
-    if (stats_view != nil)
-    {
-      [content_view addSubview:stats_view];
-    }
-    if (debug_view != nil)
-    {
-      [content_view addSubview:debug_view];
-    }
-
     context = [view openGLContext];
     if (context == nil)
     {
@@ -555,8 +1270,6 @@ int platform_create(PlatformApp* app, const char* title, int width, int height)
     app->view = view;
     app->gl_context = context;
     app->window_delegate = delegate;
-    app->stats_overlay_view = stats_view;
-    app->debug_overlay_view = debug_view;
     app->timer_start = CFAbsoluteTimeGetCurrent();
     app->running = 1;
     app->resized = 1;
@@ -572,9 +1285,27 @@ int platform_create(PlatformApp* app, const char* title, int width, int height)
     app->overlay.panel_collapsed = 1;
     app->overlay.scroll_offset = 0.0f;
     app->overlay.scroll_max = 0.0f;
+    settings_view = platform_create_settings_overlay(app);
+    if (settings_view != nil)
+    {
+      [content_view addSubview:settings_view];
+    }
+    if (stats_view != nil)
+    {
+      [content_view addSubview:stats_view];
+    }
+    if (debug_view != nil)
+    {
+      [content_view addSubview:debug_view];
+    }
+    app->settings_overlay_view = settings_view;
+    app->stats_overlay_view = stats_view;
+    app->debug_overlay_view = debug_view;
 
     platform_update_dimensions(app);
     platform_refresh_gpu_info(app);
+    platform_sync_native_overlay_visibility(app);
+    platform_sync_native_settings_controls(app);
     platform_update_native_overlays(app);
 
     [application finishLaunching];
@@ -616,6 +1347,19 @@ void platform_destroy(PlatformApp* app)
       [(NSView*)app->debug_overlay_view removeFromSuperview];
       [(NSView*)app->debug_overlay_view release];
       app->debug_overlay_view = NULL;
+    }
+
+    if (app->settings_overlay_view != NULL)
+    {
+      [(NSView*)app->settings_overlay_view removeFromSuperview];
+      [(NSView*)app->settings_overlay_view release];
+      app->settings_overlay_view = NULL;
+    }
+
+    if (app->settings_action_target != NULL)
+    {
+      [(id)app->settings_action_target release];
+      app->settings_action_target = NULL;
     }
 
     if (app->gl_context != NULL)
@@ -716,6 +1460,10 @@ void platform_pump_messages(PlatformApp* app, PlatformInput* input)
           break;
 
         case NSEventTypeLeftMouseDown:
+          if (platform_try_enter_world_from_mouse_down(app, event))
+          {
+            break;
+          }
           app->left_button_down = 1;
           if (app->mouse_captured == 0)
           {
@@ -732,6 +1480,10 @@ void platform_pump_messages(PlatformApp* app, PlatformInput* input)
           break;
 
         case NSEventTypeRightMouseDown:
+          if (platform_try_enter_world_from_mouse_down(app, event))
+          {
+            break;
+          }
           app->right_button_down = 1;
           if (app->mouse_captured == 0)
           {
@@ -799,10 +1551,17 @@ void platform_pump_messages(PlatformApp* app, PlatformInput* input)
     app->overlay.active_slider = OVERLAY_SLIDER_NONE;
     app->overlay.hot_toggle = OVERLAY_TOGGLE_NONE;
     app->overlay.hot_gpu_preference = -1;
-    app->overlay.panel_width = 0;
-    app->overlay.panel_collapsed = 1;
     app->overlay.scroll_offset = 0.0f;
     app->overlay.scroll_max = 0.0f;
+    if (app->suppress_world_click_until_release != 0)
+    {
+      if ((pressed_mouse_buttons & 3UL) == 0UL)
+      {
+        app->suppress_world_click_until_release = 0;
+      }
+      app->left_button_down = 0;
+      app->right_button_down = 0;
+    }
 
     if (has_focus && alt_down && !app->previous_alt_down)
     {
@@ -830,6 +1589,9 @@ void platform_pump_messages(PlatformApp* app, PlatformInput* input)
     {
       platform_toggle_fullscreen(app);
     }
+
+    platform_sync_native_overlay_visibility(app);
+    platform_sync_native_settings_controls(app);
 
     input->look_x = (float)app->mouse_dx;
     input->look_y = (float)app->mouse_dy;
@@ -996,6 +1758,7 @@ void platform_set_scene_settings(PlatformApp* app, const SceneSettings* settings
   }
 
   app->overlay.settings = *settings;
+  platform_sync_native_settings_controls(app);
 }
 
 int platform_get_god_mode_enabled(const PlatformApp* app)
@@ -1011,6 +1774,7 @@ void platform_set_god_mode_enabled(PlatformApp* app, int enabled)
   }
 
   app->overlay.god_mode_enabled = (enabled != 0);
+  platform_sync_native_settings_controls(app);
 }
 
 void platform_update_overlay_metrics(PlatformApp* app, const OverlayMetrics* metrics)

@@ -40,6 +40,7 @@ typedef struct AppState
 } AppState;
 
 static int app_terrain_settings_changed(const SceneSettings* previous_settings, const SceneSettings* current_settings);
+static void app_apply_renderer_quality_defaults(AppState* app);
 static float app_wrap_unit_interval(float value);
 static float app_wrap_degrees(float value);
 static BlockType app_get_block_type_for_slot(int slot);

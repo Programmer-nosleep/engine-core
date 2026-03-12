@@ -42,6 +42,8 @@ typedef struct PlatformApp
   void* window_delegate;
   void* stats_overlay_view;
   void* debug_overlay_view;
+  void* settings_overlay_view;
+  void* settings_action_target;
   double timer_start;
   int mouse_dx;
   int mouse_dy;
@@ -62,6 +64,7 @@ typedef struct PlatformApp
   int mouse_captured;
   int cursor_mode_enabled;
   int suppress_next_mouse_delta;
+  int suppress_world_click_until_release;
   int previous_world_left_button_down;
   int previous_world_right_button_down;
   int left_button_down;
