@@ -2,6 +2,7 @@
 #define OVERLAY_UI_H
 
 #include "gpu_preferences.h"
+#include "render_quality.h"
 #include "scene_settings.h"
 
 #include <stddef.h>
@@ -42,6 +43,7 @@ typedef struct OverlayState
   SceneSettings settings;
   OverlayMetrics metrics;
   GpuPreferenceInfo gpu_info;
+  RendererQualityPreset render_quality_preset;
   int panel_width;
   int panel_collapsed;
   int mouse_x;

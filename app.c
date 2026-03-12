@@ -52,6 +52,7 @@ int app_run(void)
   }
 
   app_apply_renderer_quality_defaults(&app);
+  platform_set_render_quality_preset(&app.platform, renderer_get_quality_preset(&app.renderer));
   system_monitor_create(&app.system_monitor);
   platform_set_scene_settings(&app.platform, &app.scene_settings);
   renderer_sync_terrain_render_sampling(&app.renderer, &app.player.camera);
@@ -62,6 +63,7 @@ int app_run(void)
   {
     PlatformInput input = { 0 };
     GpuPreferenceMode requested_gpu_preference = GPU_PREFERENCE_MODE_AUTO;
+    RendererQualityPreset requested_quality_preset = RENDER_QUALITY_PRESET_HIGH;
     const SceneSettings previous_scene_settings = app.scene_settings;
     float current_time_seconds = 0.0f;
     float delta_seconds = 0.0f;
@@ -83,6 +85,21 @@ int app_run(void)
 
       platform_refresh_gpu_info(&app.platform);
       platform_show_error_message("GPU Switch", "Failed to apply the GPU preference and relaunch the app.");
+    }
+
+    if (platform_consume_render_quality_request(&app.platform, &requested_quality_preset))
+    {
+      if (!renderer_set_quality_preset(&app.renderer, requested_quality_preset))
+      {
+        platform_show_error_message("Render Quality", "Failed to apply the selected render quality preset.");
+        platform_request_close(&app.platform);
+        continue;
+      }
+
+      app_apply_renderer_quality_defaults(&app);
+      platform_set_render_quality_preset(&app.platform, renderer_get_quality_preset(&app.renderer));
+      platform_set_scene_settings(&app.platform, &app.scene_settings);
+      renderer_sync_terrain_render_sampling(&app.renderer, &app.player.camera);
     }
 
     if (input.escape_pressed != 0)
@@ -270,7 +287,7 @@ static void app_apply_renderer_quality_defaults(AppState* app)
     return;
   }
 
-  if (app->renderer.quality.render_scale <= 0.60f)
+  if (app->renderer.quality.preset == RENDER_QUALITY_PRESET_ULTRA_LOW)
   {
     int changed = 0;
 
@@ -289,7 +306,7 @@ static void app_apply_renderer_quality_defaults(AppState* app)
     {
       diagnostics_logf(
         "app_run: applied low-end gpu defaults quality=%s clouds=%d palm_radius=%.1f",
-        (app->renderer.quality.name != NULL) ? app->renderer.quality.name : "unknown",
+        render_quality_preset_get_label(app->renderer.quality.preset),
         app->scene_settings.clouds_enabled,
         app->scene_settings.palm_render_radius);
     }

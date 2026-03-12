@@ -10,86 +10,134 @@ static unsigned int render_quality_query_dedicated_memory_mb(const char* rendere
 static int render_quality_is_vendor_match(const char* adapter_name, const char* vendor_name);
 static int render_quality_is_ultra_low_end_intel(const char* renderer_name, const char* vendor_name);
 
-RendererQualityProfile render_quality_pick(const char* renderer_name, const char* vendor_name)
+RendererQualityPreset render_quality_pick_preset(const char* renderer_name, const char* vendor_name)
 {
   const unsigned int dedicated_memory_mb = render_quality_query_dedicated_memory_mb(renderer_name, vendor_name);
-  RendererQualityProfile profile = {
-    "Balanced",
-    0.94f,
-    0.70f,
-    180.0f,
-    1536,
-    321,
-    0,
-    1,
-    0,
-    1,
-    1,
-    1,
-    1,
-    1.0f,
-    1.0f
-  };
 
   if (render_quality_is_ultra_low_end_intel(renderer_name, vendor_name))
   {
-    profile.name = "UHD 617";
-    profile.render_scale = 0.60f;
-    profile.trace_distance_scale = 0.24f;
-    profile.shadow_extent = 112.0f;
-    profile.shadow_map_size = 512;
-    profile.terrain_resolution = 161;
-    profile.shadow_terrain_resolution = 0;
-    profile.enable_raytrace = 0;
-    profile.enable_pathtrace = 0;
-    profile.enable_post_ao = 0;
-    profile.enable_full_clouds = 0;
-    profile.shadow_update_interval = 5;
-    profile.enable_grass_shadows = 0;
-    profile.tree_density_scale = 0.42f;
-    profile.grass_density_scale = 0.18f;
+    return RENDER_QUALITY_PRESET_ULTRA_LOW;
   }
-  else if (render_quality_contains_case_insensitive(renderer_name, "intel") ||
+  if (render_quality_contains_case_insensitive(renderer_name, "intel") ||
     render_quality_contains_case_insensitive(renderer_name, "iris") ||
     render_quality_contains_case_insensitive(renderer_name, "uhd") ||
     render_quality_contains_case_insensitive(vendor_name, "intel"))
   {
-    profile.name = "iGPU";
-    profile.render_scale = 0.72f;
-    profile.trace_distance_scale = 0.34f;
-    profile.shadow_extent = 160.0f;
-    profile.shadow_map_size = 768;
-    profile.terrain_resolution = 193;
-    profile.shadow_terrain_resolution = 0;
-    profile.enable_raytrace = 0;
-    profile.enable_pathtrace = 0;
-    profile.enable_post_ao = 0;
-    profile.enable_full_clouds = 0;
-    profile.shadow_update_interval = 3;
-    profile.enable_grass_shadows = 0;
-    profile.tree_density_scale = 0.72f;
-    profile.grass_density_scale = 0.46f;
+    return RENDER_QUALITY_PRESET_LOW;
   }
-  else if (dedicated_memory_mb > 0U && dedicated_memory_mb <= 4096U)
+  if (dedicated_memory_mb > 0U && dedicated_memory_mb <= 4096U)
   {
-    profile.name = "Hybrid";
-    profile.render_scale = 0.86f;
-    profile.trace_distance_scale = 0.46f;
-    profile.shadow_extent = 180.0f;
-    profile.shadow_map_size = 1024;
-    profile.terrain_resolution = 257;
-    profile.shadow_terrain_resolution = 0;
-    profile.enable_raytrace = 0;
-    profile.enable_pathtrace = 0;
-    profile.enable_post_ao = 0;
-    profile.enable_full_clouds = 0;
-    profile.shadow_update_interval = 2;
-    profile.enable_grass_shadows = 0;
-    profile.tree_density_scale = 0.86f;
-    profile.grass_density_scale = 0.70f;
+    return RENDER_QUALITY_PRESET_LOW;
   }
 
-  return profile;
+  return RENDER_QUALITY_PRESET_HIGH;
+}
+
+RendererQualityProfile render_quality_pick(const char* renderer_name, const char* vendor_name)
+{
+  return render_quality_get_profile(render_quality_pick_preset(renderer_name, vendor_name), renderer_name, vendor_name);
+}
+
+RendererQualityProfile render_quality_get_profile(RendererQualityPreset preset, const char* renderer_name, const char* vendor_name)
+{
+  (void)renderer_name;
+  (void)vendor_name;
+
+  switch (preset)
+  {
+    case RENDER_QUALITY_PRESET_ULTRA_LOW:
+      return (RendererQualityProfile){
+        "Ultra Low",
+        RENDER_QUALITY_PRESET_ULTRA_LOW,
+        0.60f,
+        0.24f,
+        112.0f,
+        512,
+        161,
+        0,
+        0,
+        0,
+        0,
+        0,
+        5,
+        0,
+        0.42f,
+        0.18f
+      };
+
+    case RENDER_QUALITY_PRESET_LOW:
+      return (RendererQualityProfile){
+        "Low",
+        RENDER_QUALITY_PRESET_LOW,
+        0.84f,
+        0.40f,
+        176.0f,
+        1024,
+        257,
+        0,
+        0,
+        0,
+        0,
+        0,
+        2,
+        0,
+        0.82f,
+        0.68f
+      };
+
+    case RENDER_QUALITY_PRESET_HIGH:
+    default:
+      return (RendererQualityProfile){
+        "High",
+        RENDER_QUALITY_PRESET_HIGH,
+        1.00f,
+        0.88f,
+        220.0f,
+        2048,
+        385,
+        0,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1.00f,
+        1.00f
+      };
+  }
+}
+
+const char* render_quality_preset_get_label(RendererQualityPreset preset)
+{
+  switch (preset)
+  {
+    case RENDER_QUALITY_PRESET_HIGH:
+      return "High";
+    case RENDER_QUALITY_PRESET_LOW:
+      return "Low";
+    case RENDER_QUALITY_PRESET_ULTRA_LOW:
+      return "Ultra Low";
+    case RENDER_QUALITY_PRESET_COUNT:
+    default:
+      return "High";
+  }
+}
+
+const char* render_quality_preset_get_description(RendererQualityPreset preset)
+{
+  switch (preset)
+  {
+    case RENDER_QUALITY_PRESET_HIGH:
+      return "Maksimum visual: full resolution, bayangan besar, dan efek terberat.";
+    case RENDER_QUALITY_PRESET_LOW:
+      return "Balanced: cocok untuk Intel Iris Xe class iGPU, objek tetap jelas.";
+    case RENDER_QUALITY_PRESET_ULTRA_LOW:
+      return "Paling ringan: untuk iGPU lawas seperti Intel UHD 617.";
+    case RENDER_QUALITY_PRESET_COUNT:
+    default:
+      return "Maksimum visual: full resolution, bayangan besar, dan efek terberat.";
+  }
 }
 
 static int render_quality_is_ultra_low_end_intel(const char* renderer_name, const char* vendor_name)

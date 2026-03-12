@@ -201,7 +201,9 @@ int platform_create(PlatformApp* app, const char* title, int width, int height)
   app->overlay.panel_collapsed = 0;
   app->overlay.scroll_offset = 0.0f;
   app->overlay.scroll_max = overlay_get_scroll_max_for_window(app->height);
+  app->overlay.render_quality_preset = RENDER_QUALITY_PRESET_HIGH;
   app->requested_gpu_preference = GPU_PREFERENCE_MODE_AUTO;
+  app->requested_render_quality_preset = RENDER_QUALITY_PRESET_HIGH;
   platform_refresh_gpu_info(app);
 
   diagnostics_logf(
@@ -525,6 +527,33 @@ int platform_consume_gpu_switch_request(PlatformApp* app, GpuPreferenceMode* out
 
   app->gpu_switch_requested = 0;
   return 1;
+}
+
+int platform_consume_render_quality_request(PlatformApp* app, RendererQualityPreset* out_preset)
+{
+  if (app == NULL || app->render_quality_change_requested == 0)
+  {
+    return 0;
+  }
+
+  if (out_preset != NULL)
+  {
+    *out_preset = app->requested_render_quality_preset;
+  }
+
+  app->render_quality_change_requested = 0;
+  return 1;
+}
+
+void platform_set_render_quality_preset(PlatformApp* app, RendererQualityPreset preset)
+{
+  if (app == NULL)
+  {
+    return;
+  }
+
+  app->overlay.render_quality_preset = preset;
+  app->requested_render_quality_preset = preset;
 }
 
 void platform_refresh_gpu_info(PlatformApp* app)

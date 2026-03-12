@@ -64,6 +64,7 @@ static void renderer_get_terrain_origin(const Renderer* renderer, const CameraSt
 static void renderer_transform_point(const Matrix* matrix, float x, float y, float z, float w, float* out_x, float* out_y, float* out_z, float* out_w);
 static Matrix renderer_get_stabilized_shadow_matrix(const Renderer* renderer, const Matrix* light_view, const Matrix* light_projection);
 static Matrix renderer_get_light_view_projection_matrix(const Renderer* renderer, const CameraState* camera, const AtmosphereState* atmosphere, const SceneSettings* settings);
+static void renderer_log_quality_profile(const char* context, const Renderer* renderer);
 
 int renderer_create(Renderer* renderer, int width, int height)
 {
@@ -73,26 +74,10 @@ int renderer_create(Renderer* renderer, int width, int height)
   memset(renderer, 0, sizeof(*renderer));
   renderer_name = (const char*)glGetString(GL_RENDERER);
   vendor_name = (const char*)glGetString(GL_VENDOR);
+  (void)snprintf(renderer->renderer_name, sizeof(renderer->renderer_name), "%s", (renderer_name != NULL) ? renderer_name : "unknown");
+  (void)snprintf(renderer->vendor_name, sizeof(renderer->vendor_name), "%s", (vendor_name != NULL) ? vendor_name : "unknown");
   renderer->quality = render_quality_pick(renderer_name, vendor_name);
-  diagnostics_logf(
-    "renderer_create: quality=%s render_scale=%.2f shadow=%d shadow_extent=%.1f terrain=%d shadow_terrain=%d raytrace=%d pathtrace=%d post_ao=%d clouds=%d shadow_interval=%d grass_shadow=%d tree_density=%.2f grass_density=%.2f gpu=%s vendor=%s",
-    renderer->quality.name,
-    renderer->quality.render_scale,
-    renderer->quality.shadow_map_size,
-    renderer->quality.shadow_extent,
-    renderer->quality.terrain_resolution,
-    renderer->quality.shadow_terrain_resolution,
-    renderer->quality.enable_raytrace,
-    renderer->quality.enable_pathtrace,
-    renderer->quality.enable_post_ao,
-    renderer->quality.enable_full_clouds,
-    renderer->quality.shadow_update_interval,
-    renderer->quality.enable_grass_shadows,
-    renderer->quality.tree_density_scale,
-    renderer->quality.grass_density_scale,
-    (renderer_name != NULL) ? renderer_name : "unknown",
-    (vendor_name != NULL) ? vendor_name : "unknown"
-  );
+  renderer_log_quality_profile("renderer_create", renderer);
 
   renderer->sky_program = renderer_create_program_from_files("shaders/sky.vert.glsl", "shaders/sky.frag.glsl", "Sky");
   if (renderer->sky_program == 0U)
@@ -358,6 +343,49 @@ int renderer_resize(Renderer* renderer, int width, int height)
     width,
     height);
   return 1;
+}
+
+int renderer_set_quality_preset(Renderer* renderer, RendererQualityPreset preset)
+{
+  RendererQualityProfile next_profile;
+
+  if (renderer == NULL)
+  {
+    return 0;
+  }
+
+  next_profile = render_quality_get_profile(preset, renderer->renderer_name, renderer->vendor_name);
+  if (renderer->quality.preset == next_profile.preset)
+  {
+    return 1;
+  }
+
+  renderer_destroy_framebuffer(renderer);
+  renderer_destroy_shadow_map(renderer);
+  renderer_destroy_terrain(renderer);
+  renderer->quality = next_profile;
+  renderer->shadow_ready = 0;
+  renderer->frame_index = 0U;
+
+  if (!renderer_create_terrain(renderer) ||
+    !renderer_create_shadow_map(renderer) ||
+    !renderer_resize(renderer, renderer->width, renderer->height))
+  {
+    return 0;
+  }
+
+  renderer_log_quality_profile("renderer_set_quality_preset", renderer);
+  return 1;
+}
+
+RendererQualityPreset renderer_get_quality_preset(const Renderer* renderer)
+{
+  if (renderer == NULL)
+  {
+    return RENDER_QUALITY_PRESET_HIGH;
+  }
+
+  return renderer->quality.preset;
 }
 
 void renderer_render(
@@ -1607,4 +1635,33 @@ static Matrix renderer_get_light_view_projection_matrix(const Renderer* renderer
   );
 
   return renderer_get_stabilized_shadow_matrix(renderer, &light_view, &light_projection);
+}
+
+static void renderer_log_quality_profile(const char* context, const Renderer* renderer)
+{
+  if (renderer == NULL)
+  {
+    return;
+  }
+
+  diagnostics_logf(
+    "%s: preset=%s quality=%s render_scale=%.2f shadow=%d shadow_extent=%.1f terrain=%d shadow_terrain=%d raytrace=%d pathtrace=%d post_ao=%d clouds=%d shadow_interval=%d grass_shadow=%d tree_density=%.2f grass_density=%.2f gpu=%s vendor=%s",
+    (context != NULL) ? context : "renderer",
+    render_quality_preset_get_label(renderer->quality.preset),
+    (renderer->quality.name != NULL) ? renderer->quality.name : "unknown",
+    renderer->quality.render_scale,
+    renderer->quality.shadow_map_size,
+    renderer->quality.shadow_extent,
+    renderer->quality.terrain_resolution,
+    renderer->quality.shadow_terrain_resolution,
+    renderer->quality.enable_raytrace,
+    renderer->quality.enable_pathtrace,
+    renderer->quality.enable_post_ao,
+    renderer->quality.enable_full_clouds,
+    renderer->quality.shadow_update_interval,
+    renderer->quality.enable_grass_shadows,
+    renderer->quality.tree_density_scale,
+    renderer->quality.grass_density_scale,
+    (renderer->renderer_name[0] != '\0') ? renderer->renderer_name : "unknown",
+    (renderer->vendor_name[0] != '\0') ? renderer->vendor_name : "unknown");
 }

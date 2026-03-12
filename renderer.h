@@ -76,6 +76,8 @@ typedef struct Renderer
   ConsoleOverlay console_overlay;
   StatsOverlay stats_overlay;
   RendererQualityProfile quality;
+  char renderer_name[256];
+  char vendor_name[256];
   GLsizei terrain_index_count;
   GLsizei shadow_terrain_index_count;
   unsigned int frame_index;
@@ -89,6 +91,8 @@ typedef struct Renderer
 int renderer_create(Renderer* renderer, int width, int height);
 void renderer_destroy(Renderer* renderer);
 int renderer_resize(Renderer* renderer, int width, int height);
+int renderer_set_quality_preset(Renderer* renderer, RendererQualityPreset preset);
+RendererQualityPreset renderer_get_quality_preset(const Renderer* renderer);
 void renderer_render(
   Renderer* renderer,
   const CameraState* camera,

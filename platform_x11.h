@@ -70,7 +70,9 @@ typedef struct PlatformApp
   int previous_world_left_button_down;
   int previous_world_right_button_down;
   int gpu_switch_requested;
+  int render_quality_change_requested;
   GpuPreferenceMode requested_gpu_preference;
+  RendererQualityPreset requested_render_quality_preset;
   OverlayState overlay;
   unsigned char key_down[256];
 } PlatformApp;
@@ -88,6 +90,8 @@ int platform_get_god_mode_enabled(const PlatformApp* app);
 void platform_set_god_mode_enabled(PlatformApp* app, int enabled);
 void platform_update_overlay_metrics(PlatformApp* app, const OverlayMetrics* metrics);
 int platform_consume_gpu_switch_request(PlatformApp* app, GpuPreferenceMode* out_mode);
+int platform_consume_render_quality_request(PlatformApp* app, RendererQualityPreset* out_preset);
+void platform_set_render_quality_preset(PlatformApp* app, RendererQualityPreset preset);
 void platform_refresh_gpu_info(PlatformApp* app);
 void platform_show_error_message(const char* title, const char* message);
 

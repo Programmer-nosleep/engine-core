@@ -43,7 +43,9 @@ enum
   PLATFORM_SETTINGS_GPU_SEGMENTED_TAG = 5000,
   PLATFORM_SETTINGS_GPU_STATUS_TAG = 5001,
   PLATFORM_SETTINGS_TITLE_TAG = 5002,
-  PLATFORM_SETTINGS_HINT_TAG = 5003
+  PLATFORM_SETTINGS_HINT_TAG = 5003,
+  PLATFORM_SETTINGS_QUALITY_SEGMENTED_TAG = 5004,
+  PLATFORM_SETTINGS_QUALITY_STATUS_TAG = 5005
 };
 
 @interface PlatformOpenGLView : NSOpenGLView
@@ -78,11 +80,14 @@ enum
 - (void)handleSliderChanged:(id)sender;
 - (void)handleToggleChanged:(id)sender;
 - (void)handleGpuModeChanged:(id)sender;
+- (void)handleRenderQualityChanged:(id)sender;
 @end
 
 static void platform_set_slider_setting_value(SceneSettings* settings, OverlaySliderId slider_id, float value);
 static void platform_toggle_value(PlatformApp* app, OverlayToggleId toggle_id);
 static void platform_sync_native_settings_controls(PlatformApp* app);
+static const char* platform_get_render_quality_status_text(RendererQualityPreset preset);
+static void platform_update_native_overlays(PlatformApp* app);
 
 @implementation PlatformWindowDelegate
 
@@ -159,6 +164,29 @@ static void platform_sync_native_settings_controls(PlatformApp* app);
   app->requested_gpu_preference = (GpuPreferenceMode)selected_segment;
   app->overlay.gpu_info.selected_mode = app->requested_gpu_preference;
   platform_sync_native_settings_controls(app);
+}
+
+- (void)handleRenderQualityChanged:(id)sender
+{
+  NSSegmentedControl* segmented = (NSSegmentedControl*)sender;
+  NSInteger selected_segment = 0;
+
+  if (app == NULL || segmented == nil)
+  {
+    return;
+  }
+
+  selected_segment = [segmented selectedSegment];
+  if (selected_segment < RENDER_QUALITY_PRESET_HIGH || selected_segment >= RENDER_QUALITY_PRESET_COUNT)
+  {
+    return;
+  }
+
+  app->render_quality_change_requested = 1;
+  app->requested_render_quality_preset = (RendererQualityPreset)selected_segment;
+  app->overlay.render_quality_preset = app->requested_render_quality_preset;
+  platform_sync_native_settings_controls(app);
+  platform_update_native_overlays(app);
 }
 
 @end
@@ -365,6 +393,22 @@ static NSFont* platform_font_named_or(NSString* name, CGFloat size, NSFont* fall
 {
   NSFont* font = [NSFont fontWithName:name size:size];
   return (font != nil) ? font : fallback;
+}
+
+static const char* platform_get_render_quality_status_text(RendererQualityPreset preset)
+{
+  switch (preset)
+  {
+    case RENDER_QUALITY_PRESET_HIGH:
+      return "High: maksimum visual dan semua efek berat aktif.";
+    case RENDER_QUALITY_PRESET_LOW:
+      return "Low: balanced untuk iGPU kelas Intel Iris Xe, objek tetap jelas.";
+    case RENDER_QUALITY_PRESET_ULTRA_LOW:
+      return "Ultra Low: untuk iGPU lama seperti Intel UHD 617.";
+    case RENDER_QUALITY_PRESET_COUNT:
+    default:
+      return "High: maksimum visual dan semua efek berat aktif.";
+  }
 }
 
 static float platform_get_slider_setting_value(const SceneSettings* settings, OverlaySliderId slider_id)
@@ -593,7 +637,9 @@ static NSView* platform_create_settings_overlay(PlatformApp* app)
   NSView* form_view = nil;
   NSTextField* title_label = nil;
   NSTextField* hint_label = nil;
+  NSTextField* quality_status_label = nil;
   NSTextField* gpu_status_label = nil;
+  NSSegmentedControl* quality_segmented = nil;
   NSSegmentedControl* gpu_segmented = nil;
   PlatformSettingsActionTarget* target = nil;
   CGFloat content_width = 312.0;
@@ -649,7 +695,7 @@ static NSView* platform_create_settings_overlay(PlatformApp* app)
   target->app = app;
   app->settings_action_target = target;
 
-  content_height = 40.0f + 3.0f * 30.0f + 88.0f + (CGFloat)(sizeof(k_slider_ids) / sizeof(k_slider_ids[0])) * 60.0f + 36.0f;
+  content_height = 40.0f + 3.0f * 30.0f + 96.0f + 88.0f + (CGFloat)(sizeof(k_slider_ids) / sizeof(k_slider_ids[0])) * 60.0f + 36.0f;
   form_view = [[NSView alloc] initWithFrame:NSMakeRect(0.0, 0.0, content_width, content_height)];
   [form_view setAutoresizingMask:NSViewWidthSizable];
   [scroll_view setDocumentView:form_view];
@@ -677,6 +723,38 @@ static NSView* platform_create_settings_overlay(PlatformApp* app)
   }
 
   y -= 8.0f;
+  [form_view addSubview:platform_create_overlay_label(
+    @"Render Quality",
+    platform_font_named_or(@"Menlo Bold", 12.0, [NSFont boldSystemFontOfSize:12.0]),
+    [NSColor colorWithCalibratedRed:0.96 green:0.90 blue:0.72 alpha:0.98],
+    NSTextAlignmentLeft)];
+  [[[form_view subviews] lastObject] setFrame:NSMakeRect(0.0, y, content_width, 18.0)];
+  y -= 30.0f;
+
+  quality_segmented = [[NSSegmentedControl alloc] initWithFrame:NSMakeRect(0.0, y, content_width, 28.0)];
+  [quality_segmented setSegmentCount:3];
+  [quality_segmented setLabel:[NSString stringWithUTF8String:render_quality_preset_get_label(RENDER_QUALITY_PRESET_HIGH)] forSegment:RENDER_QUALITY_PRESET_HIGH];
+  [quality_segmented setLabel:[NSString stringWithUTF8String:render_quality_preset_get_label(RENDER_QUALITY_PRESET_LOW)] forSegment:RENDER_QUALITY_PRESET_LOW];
+  [quality_segmented setLabel:[NSString stringWithUTF8String:render_quality_preset_get_label(RENDER_QUALITY_PRESET_ULTRA_LOW)] forSegment:RENDER_QUALITY_PRESET_ULTRA_LOW];
+  [quality_segmented setTag:PLATFORM_SETTINGS_QUALITY_SEGMENTED_TAG];
+  [quality_segmented setTarget:target];
+  [quality_segmented setAction:@selector(handleRenderQualityChanged:)];
+  [form_view addSubview:quality_segmented];
+  y -= 40.0f;
+
+  quality_status_label = platform_create_overlay_label(
+    @"",
+    platform_font_named_or(@"Menlo", 10.0, [NSFont systemFontOfSize:10.0]),
+    [NSColor colorWithCalibratedRed:0.82 green:0.84 blue:0.88 alpha:0.96],
+    NSTextAlignmentLeft);
+  [quality_status_label setTag:PLATFORM_SETTINGS_QUALITY_STATUS_TAG];
+  [quality_status_label setLineBreakMode:NSLineBreakByWordWrapping];
+  [quality_status_label setUsesSingleLineMode:NO];
+  [quality_status_label setFrame:NSMakeRect(0.0, y, content_width, 34.0)];
+  [form_view addSubview:quality_status_label];
+  y -= 48.0f;
+
+  y -= 4.0f;
   [form_view addSubview:platform_create_overlay_label(
     @"GPU Preference",
     platform_font_named_or(@"Menlo Bold", 12.0, [NSFont boldSystemFontOfSize:12.0]),
@@ -833,12 +911,22 @@ static void platform_sync_native_settings_controls(PlatformApp* app)
   }
 
   {
+    NSSegmentedControl* quality_segmented = (NSSegmentedControl*)[root viewWithTag:PLATFORM_SETTINGS_QUALITY_SEGMENTED_TAG];
+    NSTextField* quality_status = (NSTextField*)[root viewWithTag:PLATFORM_SETTINGS_QUALITY_STATUS_TAG];
     NSSegmentedControl* gpu_segmented = (NSSegmentedControl*)[root viewWithTag:PLATFORM_SETTINGS_GPU_SEGMENTED_TAG];
     NSTextField* gpu_status = (NSTextField*)[root viewWithTag:PLATFORM_SETTINGS_GPU_STATUS_TAG];
     const char* status_text = (app->overlay.gpu_info.status_message[0] != '\0')
       ? app->overlay.gpu_info.status_message
       : "GPU routing selection is not available on this platform";
 
+    if (quality_segmented != nil)
+    {
+      [quality_segmented setSelectedSegment:(NSInteger)app->overlay.render_quality_preset];
+    }
+    if (quality_status != nil)
+    {
+      [quality_status setStringValue:[NSString stringWithUTF8String:platform_get_render_quality_status_text(app->overlay.render_quality_preset)]];
+    }
     if (gpu_segmented != nil)
     {
       [gpu_segmented setSelectedSegment:(NSInteger)app->overlay.gpu_info.selected_mode];
@@ -1043,23 +1131,24 @@ static void platform_update_native_overlays(PlatformApp* app)
     const char* renderer_name =
       (gpu_info->current_renderer[0] != '\0') ? gpu_info->current_renderer : "OpenGL";
 
-    (void)snprintf(
-      stats_text,
-      sizeof(stats_text),
-      "ENGINE\n"
-      "FPS %.0f\n"
+	    (void)snprintf(
+	      stats_text,
+	      sizeof(stats_text),
+	      "ENGINE\n"
+	      "FPS %.0f\n"
       "Frame %.2f ms\n"
       "CPU %.0f%%\n"
       "GPU0 %.0f%%\n"
       "GPU1 %.0f%%\n"
       "Pos %.1f %.1f %.1f\n"
       "Mode %d\n"
-      "Block %d\n"
-      "Placed %d\n"
-      "Target %s\n"
-      "Renderer %s",
-      fps,
-      frame_ms,
+	      "Block %d\n"
+	      "Placed %d\n"
+	      "Target %s\n"
+	      "Quality %s\n"
+	      "Renderer %s",
+	      fps,
+	      frame_ms,
       metrics->cpu_usage_percent,
       metrics->gpu0_usage_percent,
       metrics->gpu1_usage_percent,
@@ -1067,11 +1156,12 @@ static void platform_update_native_overlays(PlatformApp* app)
       metrics->player_position_y,
       metrics->player_position_z,
       metrics->player_mode,
-      metrics->selected_block_type,
-      metrics->placed_block_count,
-      (metrics->target_active != 0) ? "ON" : "OFF",
-      renderer_name
-    );
+	      metrics->selected_block_type,
+	      metrics->placed_block_count,
+	      (metrics->target_active != 0) ? "ON" : "OFF",
+	      render_quality_preset_get_label(app->overlay.render_quality_preset),
+	      renderer_name
+	    );
 
     [stats_view setString:[NSString stringWithUTF8String:stats_text]];
   }
@@ -1274,6 +1364,7 @@ int platform_create(PlatformApp* app, const char* title, int width, int height)
     app->running = 1;
     app->resized = 1;
     app->requested_gpu_preference = GPU_PREFERENCE_MODE_AUTO;
+    app->requested_render_quality_preset = RENDER_QUALITY_PRESET_HIGH;
     app->overlay.settings = scene_settings_default();
     app->overlay.hot_slider = OVERLAY_SLIDER_NONE;
     app->overlay.active_slider = OVERLAY_SLIDER_NONE;
@@ -1281,6 +1372,7 @@ int platform_create(PlatformApp* app, const char* title, int width, int height)
     app->overlay.hot_gpu_preference = -1;
     app->overlay.god_mode_enabled = 0;
     app->overlay.freeze_time_enabled = 0;
+    app->overlay.render_quality_preset = RENDER_QUALITY_PRESET_HIGH;
     app->overlay.panel_width = 0;
     app->overlay.panel_collapsed = 1;
     app->overlay.scroll_offset = 0.0f;
@@ -1802,6 +1894,35 @@ int platform_consume_gpu_switch_request(PlatformApp* app, GpuPreferenceMode* out
 
   app->gpu_switch_requested = 0;
   return 1;
+}
+
+int platform_consume_render_quality_request(PlatformApp* app, RendererQualityPreset* out_preset)
+{
+  if (app == NULL || app->render_quality_change_requested == 0)
+  {
+    return 0;
+  }
+
+  if (out_preset != NULL)
+  {
+    *out_preset = app->requested_render_quality_preset;
+  }
+
+  app->render_quality_change_requested = 0;
+  return 1;
+}
+
+void platform_set_render_quality_preset(PlatformApp* app, RendererQualityPreset preset)
+{
+  if (app == NULL)
+  {
+    return;
+  }
+
+  app->overlay.render_quality_preset = preset;
+  app->requested_render_quality_preset = preset;
+  platform_sync_native_settings_controls(app);
+  platform_update_native_overlays(app);
 }
 
 void platform_refresh_gpu_info(PlatformApp* app)

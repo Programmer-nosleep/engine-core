@@ -366,6 +366,8 @@ int platform_create(PlatformApp* app, const char* title, int width, int height)
   app->overlay.settings = scene_settings_default();
   app->overlay.god_mode_enabled = 0;
   app->overlay.freeze_time_enabled = 0;
+  app->overlay.render_quality_preset = RENDER_QUALITY_PRESET_HIGH;
+  app->requested_render_quality_preset = RENDER_QUALITY_PRESET_HIGH;
   platform_sync_overlay_state(app);
   platform_refresh_gpu_info(app);
 
@@ -801,6 +803,33 @@ int platform_consume_gpu_switch_request(PlatformApp* app, GpuPreferenceMode* out
 
   app->gpu_switch_requested = 0;
   return 1;
+}
+
+int platform_consume_render_quality_request(PlatformApp* app, RendererQualityPreset* out_preset)
+{
+  if (app == NULL || app->render_quality_change_requested == 0)
+  {
+    return 0;
+  }
+
+  if (out_preset != NULL)
+  {
+    *out_preset = app->requested_render_quality_preset;
+  }
+
+  app->render_quality_change_requested = 0;
+  return 1;
+}
+
+void platform_set_render_quality_preset(PlatformApp* app, RendererQualityPreset preset)
+{
+  if (app == NULL)
+  {
+    return;
+  }
+
+  app->overlay.render_quality_preset = preset;
+  app->requested_render_quality_preset = preset;
 }
 
 void platform_refresh_gpu_info(PlatformApp* app)
