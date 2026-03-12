@@ -208,22 +208,6 @@ int platform_create(PlatformApp* app, const char* title, int width, int height)
 {
   @autoreleasepool
   {
-    (void)title;
-    (void)width;
-    (void)height;
-
-    if (app != NULL)
-    {
-      memset(app, 0, sizeof(*app));
-    }
-
-    diagnostics_log("platform_create: cocoa metal-only guard triggered");
-    platform_show_error_message(
-      "Metal Renderer Required",
-      "Cocoa backend hanya diizinkan untuk renderer Metal di macOS. Jalur OpenGL Cocoa dinonaktifkan.");
-    return 0;
-
-#if 0
     NSApplication* application = nil;
     NSWindow* window = nil;
     NSOpenGLPixelFormat* pixel_format = nil;
@@ -380,7 +364,6 @@ int platform_create(PlatformApp* app, const char* title, int width, int height)
       (const char*)glGetString(GL_RENDERER),
       (const char*)glGetString(GL_VENDOR));
     return 1;
-#endif
   }
 }
 

@@ -371,6 +371,7 @@ else()
     )
   elseif("${OPENGL_SKY_PLATFORM_OS}" STREQUAL "Darwin")
     list(APPEND OPENGL_SKY_SOURCES
+      audio_macos.mm
       platform_cocoa.mm
     )
   elseif("${OPENGL_SKY_PLATFORM_OS}" STREQUAL "Linux")
@@ -437,8 +438,9 @@ else()
         winmm
     )
   elseif("${OPENGL_SKY_PLATFORM_OS}" STREQUAL "Darwin")
+    find_library(AVFOUNDATION_FRAMEWORK AVFoundation REQUIRED)
     find_library(COCOA_FRAMEWORK Cocoa REQUIRED)
-    target_link_libraries(opengl_sky PRIVATE ${COCOA_FRAMEWORK})
+    target_link_libraries(opengl_sky PRIVATE ${AVFOUNDATION_FRAMEWORK} ${COCOA_FRAMEWORK})
     target_compile_definitions(opengl_sky PRIVATE GL_SILENCE_DEPRECATION)
   elseif("${OPENGL_SKY_PLATFORM_OS}" STREQUAL "Linux")
     target_compile_definitions(opengl_sky PRIVATE _POSIX_C_SOURCE=200809L)
@@ -485,4 +487,3 @@ else()
 
   set_property(DIRECTORY PROPERTY VS_STARTUP_PROJECT opengl_sky)
 endif()
-

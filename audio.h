@@ -16,12 +16,13 @@ typedef struct AudioState
   size_t track_count;
   size_t track_capacity;
   size_t current_track_index;
-#if defined(_WIN32)
   int is_open;
   int current_volume;
   int target_volume;
   int fade_active;
-  unsigned long fade_start_ms;
+  unsigned long long fade_start_ms;
+#if defined(__APPLE__)
+  void* native_player;
 #endif
 } AudioState;
 
@@ -32,4 +33,3 @@ void audio_stop(AudioState* state);
 void audio_shutdown(AudioState* state);
 
 #endif
-

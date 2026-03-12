@@ -7,11 +7,7 @@ static int graphics_backend_equals_ignore_case(const char* a, const char* b);
 
 GraphicsBackend graphics_backend_get_default(void)
 {
-#if defined(__APPLE__)
-  return GRAPHICS_BACKEND_METAL;
-#else
   return GRAPHICS_BACKEND_OPENGL;
-#endif
 }
 
 GraphicsBackend graphics_backend_resolve_requested(void)
@@ -50,7 +46,7 @@ const char* graphics_backend_get_name(GraphicsBackend backend)
 int graphics_backend_is_supported_on_platform(GraphicsBackend backend)
 {
 #if defined(__APPLE__)
-  return backend == GRAPHICS_BACKEND_METAL;
+  return backend == GRAPHICS_BACKEND_OPENGL;
 #else
   return backend == GRAPHICS_BACKEND_OPENGL;
 #endif
@@ -66,13 +62,13 @@ int graphics_backend_build_error_message(GraphicsBackend backend, char* out_mess
   }
 
 #if defined(__APPLE__)
-  if (backend == GRAPHICS_BACKEND_OPENGL)
+  if (backend == GRAPHICS_BACKEND_METAL)
   {
-    message = "Cocoa backend sekarang dikunci ke Metal-only. OpenGL untuk macOS dinonaktifkan.";
+    message = "Backend Metal dipilih untuk macOS, tapi renderer Metal belum diimplementasikan di project ini. Gunakan backend OpenGL.";
   }
   else
   {
-    message = "Backend Metal dipilih untuk Cocoa/macOS, tapi renderer Metal belum diimplementasikan di project ini.";
+    message = "Backend yang dipilih tidak cocok dengan renderer macOS saat ini.";
   }
 #else
   if (backend == GRAPHICS_BACKEND_METAL)

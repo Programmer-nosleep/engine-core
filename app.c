@@ -30,20 +30,6 @@ int app_run(void)
     return 1;
   }
 
-#if defined(__APPLE__)
-  if (!graphics_backend_build_error_message(graphics_backend, graphics_error_message, sizeof(graphics_error_message)))
-  {
-    (void)snprintf(
-      graphics_error_message,
-      sizeof(graphics_error_message),
-      "Backend '%s' belum siap dipakai di macOS.",
-      graphics_backend_get_name(graphics_backend));
-  }
-  diagnostics_logf("app_run: apple_backend_guard=%s", graphics_backend_get_name(graphics_backend));
-  platform_support_show_error_dialog("Metal Renderer Required", graphics_error_message);
-  return 1;
-#endif
-
   app.scene_settings = scene_settings_default();
   app.day_cycle.time_of_day = k_app_default_time_of_day;
   app.day_cycle.cycles_per_second = 1.0f / app.scene_settings.cycle_duration_seconds;
@@ -502,4 +488,3 @@ static void app_update_window_title(const AppState* app)
   #endif
   platform_set_window_title(&app->platform, title);
 }
-

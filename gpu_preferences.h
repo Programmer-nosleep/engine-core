@@ -1,6 +1,10 @@
 #ifndef GPU_PREFERENCES_H
 #define GPU_PREFERENCES_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define GPU_PREFERENCES_MAX_ADAPTERS 8
 #define GPU_PREFERENCES_MAX_NAME_LENGTH 96
 #define GPU_PREFERENCES_MAX_RENDERER_LENGTH 128
@@ -40,5 +44,9 @@ void gpu_preferences_set_current_renderer(GpuPreferenceInfo* info, const char* r
 int gpu_preferences_apply_and_relaunch(GpuPreferenceMode mode);
 const char* gpu_preferences_get_mode_label(GpuPreferenceMode mode);
 const char* gpu_preferences_get_mode_short_label(GpuPreferenceMode mode);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

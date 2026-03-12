@@ -3,14 +3,19 @@
 #include "diagnostics.h"
 
 #include <ctype.h>
-#include <stdlib.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <mmsystem.h>
+#elif defined(__APPLE__)
+#include "audio_macos.h"
+#include <dirent.h>
+#include <sys/stat.h>
 #else
 #include <dirent.h>
 #include <sys/stat.h>
@@ -40,6 +45,13 @@ static int audio_score_candidate(const char* filename);
 static int audio_string_contains_ignore_case(const char* text, const char* needle);
 static int audio_compare_ignore_case(const char* a, const char* b);
 static char audio_to_lower_ascii(char value);
+static unsigned long long audio_get_tick_ms(void);
+static int audio_open_and_play(AudioState* player, const char* path);
+static int audio_play_track_from(AudioState* player, size_t start_index);
+static int audio_set_volume(AudioState* state, int volume, int log_failure);
+static void audio_begin_fade_in(AudioState* state);
+static void audio_update_fade(AudioState* state);
+static int audio_clamp_int(int value, int min_value, int max_value);
 
 #if defined(_WIN32)
 static const char* k_audio_alias = "sawit_game_music";
@@ -47,13 +59,7 @@ static const char* k_audio_alias = "sawit_game_music";
 static void audio_normalize_path_separators(char* path);
 static int audio_send_command(const char* command, int log_failure);
 static int audio_send_command_for_string(const char* command, char* out_text, size_t out_text_size, int log_failure);
-static int audio_open_and_play(AudioState* player, const char* path);
-static int audio_play_track_from(AudioState* player, size_t start_index);
 static int audio_query_mode(const AudioState* player, char* out_mode, size_t out_mode_size);
-static int audio_set_volume(AudioState* state, int volume, int log_failure);
-static void audio_begin_fade_in(AudioState* state);
-static void audio_update_fade(AudioState* state);
-static int audio_clamp_int(int value, int min_value, int max_value);
 static void audio_trim_trailing_whitespace(char* text);
 #endif
 
@@ -65,6 +71,7 @@ void audio_init(AudioState* state)
   }
 
   memset(state, 0, sizeof(*state));
+  state->target_volume = AUDIO_DEFAULT_TARGET_VOLUME;
 }
 
 int audio_start_music(AudioState* state)
@@ -92,9 +99,19 @@ int audio_start_music(AudioState* state)
 
   diagnostics_logf("audio: background music started with %zu track(s), now playing '%s'", state->track_count, state->active_path);
   return 1;
+#elif defined(__APPLE__)
+  if (!audio_play_track_from(state, 0U))
+  {
+    diagnostics_log("audio: failed to start any playable music track from res/audio");
+    audio_clear_tracks(state);
+    return 0;
+  }
+
+  diagnostics_logf("audio: background music started with %zu track(s), now playing '%s'", state->track_count, state->active_path);
+  return 1;
 #else
   diagnostics_logf("audio: found %zu music track(s) in res/audio", state->track_count);
-  diagnostics_log("audio: native background music playback is currently implemented only for Windows");
+  diagnostics_log("audio: native background music playback is currently implemented only for Windows and macOS");
   return 0;
 #endif
 }
@@ -133,6 +150,24 @@ void audio_update(AudioState* state)
     const size_t next_track_index = (state->current_track_index + 1U) % state->track_count;
     (void)audio_play_track_from(state, next_track_index);
   }
+#elif defined(__APPLE__)
+  if (state == NULL || state->is_open == 0)
+  {
+    return;
+  }
+
+  audio_update_fade(state);
+
+  if (state->track_count <= 1U || audio_macos_is_playing(state))
+  {
+    return;
+  }
+
+  if (state->track_count > 0U)
+  {
+    const size_t next_track_index = (state->current_track_index + 1U) % state->track_count;
+    (void)audio_play_track_from(state, next_track_index);
+  }
 #else
   (void)state;
 #endif
@@ -156,11 +191,19 @@ void audio_stop(AudioState* state)
     (void)audio_send_command(command, 0);
     state->is_open = 0;
   }
+#elif defined(__APPLE__)
+  if (state->native_player != NULL)
+  {
+    audio_macos_stop(state);
+  }
 #endif
 
+  state->is_open = 0;
   state->active_path[0] = '\0';
   state->fade_active = 0;
   state->current_volume = AUDIO_VOLUME_MIN;
+  state->target_volume = AUDIO_DEFAULT_TARGET_VOLUME;
+  state->fade_start_ms = 0ULL;
 }
 
 void audio_shutdown(AudioState* state)
@@ -715,71 +758,148 @@ static int audio_send_command_for_string(const char* command, char* out_text, si
   return 0;
 }
 
+static int audio_query_mode(const AudioState* player, char* out_mode, size_t out_mode_size)
+{
+  char command[AUDIO_COMMAND_LENGTH] = { 0 };
+
+  if (player == NULL || player->is_open == 0 || out_mode == NULL || out_mode_size == 0U)
+  {
+    return 0;
+  }
+
+  (void)snprintf(command, sizeof(command), "status %s mode", k_audio_alias);
+  if (!audio_send_command_for_string(command, out_mode, out_mode_size, 0))
+  {
+    return 0;
+  }
+
+  audio_trim_trailing_whitespace(out_mode);
+  return 1;
+}
+
+static void audio_trim_trailing_whitespace(char* text)
+{
+  size_t length = 0U;
+
+  if (text == NULL)
+  {
+    return;
+  }
+
+  length = strlen(text);
+  while (length > 0U && isspace((unsigned char)text[length - 1U]))
+  {
+    text[length - 1U] = '\0';
+    --length;
+  }
+}
+#endif
+
+static unsigned long long audio_get_tick_ms(void)
+{
+#if defined(_WIN32)
+  return (unsigned long long)GetTickCount64();
+#else
+  struct timespec now = { 0 };
+
+  if (clock_gettime(CLOCK_MONOTONIC, &now) != 0)
+  {
+    return 0ULL;
+  }
+
+  return ((unsigned long long)now.tv_sec * 1000ULL) + (unsigned long long)(now.tv_nsec / 1000000L);
+#endif
+}
+
 static int audio_open_and_play(AudioState* player, const char* path)
 {
-  char normalized_path[PLATFORM_PATH_MAX] = { 0 };
-  char command[AUDIO_COMMAND_LENGTH] = { 0 };
-  const char* extension = NULL;
-
   if (player == NULL || path == NULL || path[0] == '\0')
   {
     return 0;
   }
 
-  audio_stop(player);
-  (void)snprintf(normalized_path, sizeof(normalized_path), "%s", path);
-  audio_normalize_path_separators(normalized_path);
-  extension = strrchr(normalized_path, '.');
-
-  (void)snprintf(command, sizeof(command), "open \"%s\" alias %s", normalized_path, k_audio_alias);
-  if (!audio_send_command(command, 0))
+#if defined(_WIN32)
   {
-    const char* media_type = NULL;
+    char normalized_path[PLATFORM_PATH_MAX] = { 0 };
+    char command[AUDIO_COMMAND_LENGTH] = { 0 };
+    const char* extension = NULL;
 
-    if (extension != NULL)
+    audio_stop(player);
+    (void)snprintf(normalized_path, sizeof(normalized_path), "%s", path);
+    audio_normalize_path_separators(normalized_path);
+    extension = strrchr(normalized_path, '.');
+
+    (void)snprintf(command, sizeof(command), "open \"%s\" alias %s", normalized_path, k_audio_alias);
+    if (!audio_send_command(command, 0))
     {
-      if (audio_compare_ignore_case(extension, ".wav") == 0)
+      const char* media_type = NULL;
+
+      if (extension != NULL)
       {
-        media_type = "waveaudio";
+        if (audio_compare_ignore_case(extension, ".wav") == 0)
+        {
+          media_type = "waveaudio";
+        }
+        else if (audio_compare_ignore_case(extension, ".mp3") == 0 ||
+          audio_compare_ignore_case(extension, ".ogg") == 0)
+        {
+          media_type = "mpegvideo";
+        }
       }
-      else if (audio_compare_ignore_case(extension, ".mp3") == 0 ||
-        audio_compare_ignore_case(extension, ".ogg") == 0)
+
+      if (media_type == NULL)
       {
-        media_type = "mpegvideo";
+        return 0;
+      }
+
+      (void)snprintf(command, sizeof(command), "open \"%s\" type %s alias %s", normalized_path, media_type, k_audio_alias);
+      if (!audio_send_command(command, 1))
+      {
+        return 0;
       }
     }
 
-    if (media_type == NULL)
+    if (player->track_count <= 1U)
     {
-      return 0;
+      (void)snprintf(command, sizeof(command), "play %s from 0 repeat", k_audio_alias);
     }
-
-    (void)snprintf(command, sizeof(command), "open \"%s\" type %s alias %s", normalized_path, media_type, k_audio_alias);
+    else
+    {
+      (void)snprintf(command, sizeof(command), "play %s from 0", k_audio_alias);
+    }
     if (!audio_send_command(command, 1))
     {
+      audio_stop(player);
       return 0;
     }
-  }
 
-  if (player->track_count <= 1U)
-  {
-    (void)snprintf(command, sizeof(command), "play %s from 0 repeat", k_audio_alias);
+    player->is_open = 1;
+    player->target_volume = AUDIO_DEFAULT_TARGET_VOLUME;
+    (void)snprintf(player->active_path, sizeof(player->active_path), "%s", normalized_path);
+    audio_begin_fade_in(player);
+    return 1;
   }
-  else
+#elif defined(__APPLE__)
   {
-    (void)snprintf(command, sizeof(command), "play %s from 0", k_audio_alias);
-  }
-  if (!audio_send_command(command, 1))
-  {
+    const int repeat = (player->track_count <= 1U) ? 1 : 0;
+
     audio_stop(player);
-    return 0;
-  }
+    player->target_volume = AUDIO_DEFAULT_TARGET_VOLUME;
+    if (!audio_macos_open_and_play(player, path, repeat))
+    {
+      return 0;
+    }
 
-  player->is_open = 1;
-  player->target_volume = AUDIO_DEFAULT_TARGET_VOLUME;
-  (void)snprintf(player->active_path, sizeof(player->active_path), "%s", normalized_path);
-  audio_begin_fade_in(player);
-  return 1;
+    player->is_open = 1;
+    (void)snprintf(player->active_path, sizeof(player->active_path), "%s", path);
+    audio_begin_fade_in(player);
+    return 1;
+  }
+#else
+  (void)player;
+  (void)path;
+  return 0;
+#endif
 }
 
 static int audio_play_track_from(AudioState* player, size_t start_index)
@@ -811,28 +931,8 @@ static int audio_play_track_from(AudioState* player, size_t start_index)
   return 0;
 }
 
-static int audio_query_mode(const AudioState* player, char* out_mode, size_t out_mode_size)
-{
-  char command[AUDIO_COMMAND_LENGTH] = { 0 };
-
-  if (player == NULL || player->is_open == 0 || out_mode == NULL || out_mode_size == 0U)
-  {
-    return 0;
-  }
-
-  (void)snprintf(command, sizeof(command), "status %s mode", k_audio_alias);
-  if (!audio_send_command_for_string(command, out_mode, out_mode_size, 0))
-  {
-    return 0;
-  }
-
-  audio_trim_trailing_whitespace(out_mode);
-  return 1;
-}
-
 static int audio_set_volume(AudioState* state, int volume, int log_failure)
 {
-  char command[AUDIO_COMMAND_LENGTH] = { 0 };
   const int clamped_volume = audio_clamp_int(volume, AUDIO_VOLUME_MIN, AUDIO_VOLUME_MAX);
 
   if (state == NULL || state->is_open == 0)
@@ -840,11 +940,29 @@ static int audio_set_volume(AudioState* state, int volume, int log_failure)
     return 0;
   }
 
-  (void)snprintf(command, sizeof(command), "setaudio %s volume to %d", k_audio_alias, clamped_volume);
-  if (!audio_send_command(command, log_failure))
+#if defined(_WIN32)
   {
+    char command[AUDIO_COMMAND_LENGTH] = { 0 };
+
+    (void)snprintf(command, sizeof(command), "setaudio %s volume to %d", k_audio_alias, clamped_volume);
+    if (!audio_send_command(command, log_failure))
+    {
+      return 0;
+    }
+  }
+#elif defined(__APPLE__)
+  if (!audio_macos_set_volume(state, clamped_volume))
+  {
+    if (log_failure != 0)
+    {
+      diagnostics_logf("audio: failed to set macOS track volume to %d", clamped_volume);
+    }
     return 0;
   }
+#else
+  (void)log_failure;
+  return 0;
+#endif
 
   state->current_volume = clamped_volume;
   return 1;
@@ -858,7 +976,7 @@ static void audio_begin_fade_in(AudioState* state)
   }
 
   state->target_volume = audio_clamp_int(state->target_volume, AUDIO_VOLUME_MIN, AUDIO_VOLUME_MAX);
-  state->fade_start_ms = GetTickCount();
+  state->fade_start_ms = audio_get_tick_ms();
   state->fade_active = 1;
   if (!audio_set_volume(state, AUDIO_VOLUME_MIN, 0))
   {
@@ -869,8 +987,8 @@ static void audio_begin_fade_in(AudioState* state)
 
 static void audio_update_fade(AudioState* state)
 {
-  const unsigned long now_ms = GetTickCount();
-  unsigned long elapsed_ms = 0U;
+  const unsigned long long now_ms = audio_get_tick_ms();
+  unsigned long long elapsed_ms = 0ULL;
   int next_volume = 0;
 
   if (state == NULL || state->fade_active == 0 || state->is_open == 0)
@@ -906,23 +1024,3 @@ static int audio_clamp_int(int value, int min_value, int max_value)
   }
   return value;
 }
-
-static void audio_trim_trailing_whitespace(char* text)
-{
-  size_t length = 0U;
-
-  if (text == NULL)
-  {
-    return;
-  }
-
-  length = strlen(text);
-  while (length > 0U && isspace((unsigned char)text[length - 1U]))
-  {
-    text[length - 1U] = '\0';
-    --length;
-  }
-}
-
-#endif
-
