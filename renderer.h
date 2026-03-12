@@ -14,6 +14,8 @@
 #include "stats_overlay.h"
 #include "tree_render.h"
 
+#include <gl/GL.h>
+
 typedef struct Renderer
 {
   GLuint sky_vao;

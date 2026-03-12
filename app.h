@@ -6,6 +6,7 @@
 #include "graphics_backend.h"
 #include "gpu_preferences.h"
 #include "player_controller.h"
+#include "platform.h"
 #include "platform_support.h"
 #include "renderer.h"
 #include "scene_settings.h"

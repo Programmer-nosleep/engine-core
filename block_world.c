@@ -1,5 +1,4 @@
 #include "block_world.h"
-
 #include "terrain.h"
 
 #include <float.h>

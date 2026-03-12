@@ -3,6 +3,7 @@
 
 #include "gpu_preferences.h"
 #include "scene_settings.h"
+
 #include <stddef.h>
 
 typedef enum OverlaySliderId

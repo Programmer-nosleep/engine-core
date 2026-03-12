@@ -289,7 +289,7 @@ void system_monitor_create(SystemMonitor* monitor)
   }
 
   memset(monitor, 0, sizeof(*monitor));
-  diagnostics_log("system_monitor_create: using macOS stub implementation");
+  diagnostics_log("system_monitor_create: using non-Windows stub implementation");
 }
 
 void system_monitor_destroy(SystemMonitor* monitor)

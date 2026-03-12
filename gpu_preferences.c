@@ -468,8 +468,8 @@ int gpu_preferences_query(GpuPreferenceInfo* out_info)
   gpu_preferences_copy_utf8(
     out_info->status_message,
     sizeof(out_info->status_message),
-    "GPU routing selection is not available on macOS");
-  diagnostics_log("gpu_preferences_query: using macOS stub implementation");
+    "GPU routing selection is not available on this platform");
+  diagnostics_log("gpu_preferences_query: using non-Windows stub implementation");
   return 0;
 }
 
@@ -487,7 +487,7 @@ void gpu_preferences_set_current_renderer(GpuPreferenceInfo* info, const char* r
 int gpu_preferences_apply_and_relaunch(GpuPreferenceMode mode)
 {
   (void)mode;
-  diagnostics_log("gpu_preferences_apply_and_relaunch: macOS stub does not support relaunch routing");
+  diagnostics_log("gpu_preferences_apply_and_relaunch: non-Windows stub does not support relaunch routing");
   return 0;
 }
 

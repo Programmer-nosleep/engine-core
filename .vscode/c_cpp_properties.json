@@ -1,0 +1,42 @@
+{
+  "version": 4,
+  "configurations": [
+    {
+      "name": "OpenGL Sky",
+      "configurationProvider": "ms-vscode.cmake-tools",
+      "includePath": [
+        "${workspaceFolder}",
+        "${env:VCPKG_ROOT}/installed/x64-windows/include",
+        "${env:VCPKG_ROOT}/installed/x64-linux/include",
+        "${env:VCPKG_ROOT}/installed/x64-osx/include",
+        "${env:VCPKG_ROOT}/installed/arm64-windows/include",
+        "${env:VCPKG_ROOT}/installed/arm64-linux/include",
+        "${env:VCPKG_ROOT}/installed/arm64-osx/include",
+        "C:/vcpkg/installed/x64-windows/include",
+        "C:/vcpkg/installed/x64-linux/include",
+        "C:/vcpkg/installed/x64-osx/include",
+        "C:/vcpkg/installed/arm64-windows/include",
+        "C:/vcpkg/installed/arm64-linux/include",
+        "C:/vcpkg/installed/arm64-osx/include"
+      ],
+      "browse": {
+        "path": [
+          "${workspaceFolder}",
+          "${env:VCPKG_ROOT}/installed/x64-windows/include",
+          "${env:VCPKG_ROOT}/installed/x64-linux/include",
+          "${env:VCPKG_ROOT}/installed/x64-osx/include",
+          "${env:VCPKG_ROOT}/installed/arm64-windows/include",
+          "${env:VCPKG_ROOT}/installed/arm64-linux/include",
+          "${env:VCPKG_ROOT}/installed/arm64-osx/include",
+          "C:/vcpkg/installed/x64-windows/include",
+          "C:/vcpkg/installed/x64-linux/include",
+          "C:/vcpkg/installed/x64-osx/include",
+          "C:/vcpkg/installed/arm64-windows/include",
+          "C:/vcpkg/installed/arm64-linux/include",
+          "C:/vcpkg/installed/arm64-osx/include"
+        ],
+        "limitSymbolsToIncludedHeaders": true
+      }
+    }
+  ]
+}

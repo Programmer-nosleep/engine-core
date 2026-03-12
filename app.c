@@ -1,12 +1,6 @@
 #include "app.h"
-
-#if defined(_WIN32)
-#include "platform_win32.h"
-#elif defined(__APPLE__)
-#include "platform_cocoa.h"
-#else
-#error Unsupported platform
-#endif
+#include "audio.h"
+#include "platform.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -14,8 +8,12 @@
 int app_run(void)
 {
   AppState app = { 0 };
+  AudioState music_audio = { 0 };
   GraphicsBackend graphics_backend = GRAPHICS_BACKEND_OPENGL;
   char graphics_error_message[256] = { 0 };
+  int music_started = 0;
+
+  audio_init(&music_audio);
 
   diagnostics_log("app_run: startup begin");
   graphics_backend = graphics_backend_resolve_requested();
@@ -62,6 +60,7 @@ int app_run(void)
   if (!renderer_create(&app.renderer, app.platform.width, app.platform.height))
   {
     diagnostics_log("app_run: renderer_create failed");
+    audio_shutdown(&music_audio);
     platform_destroy(&app.platform);
     return 1;
   }
@@ -85,6 +84,7 @@ int app_run(void)
     {
       break;
     }
+    audio_update(&music_audio);
 
     if (platform_consume_gpu_switch_request(&app.platform, &requested_gpu_preference))
     {
@@ -261,8 +261,14 @@ int app_run(void)
       &app.platform.overlay,
       &app.block_world);
     platform_swap_buffers(&app.platform);
+    if (music_started == 0)
+    {
+      (void)audio_start_music(&music_audio);
+      music_started = 1;
+    }
   }
 
+  audio_shutdown(&music_audio);
   system_monitor_destroy(&app.system_monitor);
   renderer_destroy(&app.renderer);
   platform_destroy(&app.platform);
@@ -496,3 +502,4 @@ static void app_update_window_title(const AppState* app)
   #endif
   platform_set_window_title(&app->platform, title);
 }
+

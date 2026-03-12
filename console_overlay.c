@@ -1,6 +1,6 @@
 #include "console_overlay.h"
 
-#if defined(__APPLE__)
+#if !defined(_WIN32)
 
 #include <string.h>
 

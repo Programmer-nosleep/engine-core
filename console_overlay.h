@@ -4,6 +4,8 @@
 #include "gl_headers.h"
 #include "overlay_ui.h"
 
+#include <gl/GL.h>
+
 typedef struct ConsoleOverlay
 {
   GLuint font_base;

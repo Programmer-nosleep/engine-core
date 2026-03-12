@@ -3,7 +3,7 @@
 
 #include "block_world.h"
 #include "camera.h"
-#include "platform_win32.h"
+#include "platform.h"
 #include "scene_settings.h"
 
 typedef enum PlayerMode

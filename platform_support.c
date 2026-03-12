@@ -5,8 +5,12 @@
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
-#else
+#elif defined(__APPLE__)
 #include <mach-o/dyld.h>
+#include <sys/stat.h>
+#include <time.h>
+#include <unistd.h>
+#else
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
@@ -29,7 +33,7 @@ int platform_support_get_executable_path(char* out_path, size_t out_path_size)
     }
   }
   return 1;
-#else
+#elif defined(__APPLE__)
   {
     uint32_t size = (uint32_t)out_path_size;
     if (_NSGetExecutablePath(out_path, &size) != 0)
@@ -37,6 +41,17 @@ int platform_support_get_executable_path(char* out_path, size_t out_path_size)
       out_path[0] = '\0';
       return 0;
     }
+  }
+  return 1;
+#else
+  {
+    const ssize_t length = readlink("/proc/self/exe", out_path, out_path_size - 1U);
+    if (length <= 0 || (size_t)length >= out_path_size)
+    {
+      out_path[0] = '\0';
+      return 0;
+    }
+    out_path[length] = '\0';
   }
   return 1;
 #endif
@@ -105,9 +120,7 @@ void platform_support_sleep_ms(unsigned int milliseconds)
     (time_t)(milliseconds / 1000U),
     (long)((milliseconds % 1000U) * 1000000UL)
   };
-  while (nanosleep(&duration, &duration) != 0)
-  {
-  }
+  while (nanosleep(&duration, &duration) != 0);
 #endif
 }
 

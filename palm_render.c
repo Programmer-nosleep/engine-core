@@ -15,6 +15,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <gl/GL.h>
+
 #if defined(_MSC_VER)
 #define palm_render_sscanf sscanf_s
 #else
