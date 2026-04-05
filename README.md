@@ -1,9 +1,9 @@
-# Dokumentasi Terpadu — opengl_sky
+# Sawit Engine
 
 Dokumentasi ini dirancang sebagai satu sumber terpusat untuk: setup, dependensi, build & run, serta tempat menaruh gambar/video dokumentasi. Anda bisa menambahkan screenshot atau video ke folder `docs/images` dan `docs/videos` lalu merujuknya dari file ini.
 
 **Ringkasan singkat**:
-- Project C: `opengl_sky` (target CMake)
+- Project C: `opengl_sky` | `sawit-engine` (target CMake)
 - Dependency utama yang disertakan: `stb_image.h` (header-only)
 - Engine menggunakan OpenGL (GLEW atau build via FetchContent) dan API bawaan OS; ada beberapa file Objective-C++ (`.mm`) untuk macOS.
 
@@ -139,3 +139,4 @@ Jika Anda ingin, saya bisa:
 - Membuat versi singkat `README.md` yang fokus ke instruksi cepat (one-liner build/run).
 
 Terima kasih — beri tahu file gambar/video yang ingin Anda sertakan atau langsung upload ke repo, saya akan masukkan ke dokumentasi.
+
