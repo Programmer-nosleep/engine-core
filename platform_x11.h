@@ -67,8 +67,10 @@ typedef struct PlatformApp
   int suppress_next_mouse_delta;
   int left_button_down;
   int right_button_down;
+  int previous_left_button_down;
   int previous_world_left_button_down;
   int previous_world_right_button_down;
+  int suppress_world_click_until_release;
   int gpu_switch_requested;
   int render_quality_change_requested;
   GpuPreferenceMode requested_gpu_preference;

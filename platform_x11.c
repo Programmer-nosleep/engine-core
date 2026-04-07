@@ -20,11 +20,27 @@
 static double platform_get_monotonic_seconds(void);
 static int platform_window_has_focus(const PlatformApp* app);
 static int platform_is_key_down(const PlatformApp* app, KeySym symbol);
-static void platform_sync_overlay_state(PlatformApp* app);
 static void platform_center_cursor(PlatformApp* app);
 static void platform_set_mouse_capture(PlatformApp* app, int enabled);
 static void platform_toggle_fullscreen(PlatformApp* app);
 static Cursor platform_create_blank_cursor(Display* display, Window window);
+static int platform_get_overlay_width(const PlatformApp* app);
+static int platform_get_overlay_visible_width(const PlatformApp* app);
+static float platform_clamp_float(float value, float min_value, float max_value);
+static int platform_point_in_client(const PlatformApp* app, int x, int y);
+static int platform_point_in_overlay(const PlatformApp* app, int x, int y);
+static int platform_point_in_overlay_scroll_view(const PlatformApp* app, int x, int y);
+static int platform_get_overlay_button_rect(const PlatformApp* app, int* out_left, int* out_top, int* out_right, int* out_bottom);
+static int platform_get_overlay_slider_rect(const PlatformApp* app, OverlaySliderId slider_id, int* out_left, int* out_top, int* out_right, int* out_bottom);
+static int platform_get_overlay_toggle_rect(const PlatformApp* app, OverlayToggleId toggle_id, int* out_left, int* out_top, int* out_right, int* out_bottom);
+static int platform_get_overlay_gpu_preference_rect(const PlatformApp* app, GpuPreferenceMode mode, int* out_left, int* out_top, int* out_right, int* out_bottom);
+static OverlayToggleId platform_get_hovered_toggle(const PlatformApp* app, int x, int y);
+static OverlaySliderId platform_get_hovered_slider(const PlatformApp* app, int x, int y);
+static GpuPreferenceMode platform_get_hovered_gpu_preference(const PlatformApp* app, int x, int y);
+static void platform_toggle_value(PlatformApp* app, OverlayToggleId toggle_id);
+static void platform_set_slider_value(SceneSettings* settings, OverlaySliderId slider_id, float value);
+static void platform_adjust_overlay_scroll(PlatformApp* app, float delta);
+static void platform_update_overlay_interaction(PlatformApp* app, int has_focus);
 
 static double platform_get_monotonic_seconds(void)
 {
@@ -63,24 +79,520 @@ static int platform_is_key_down(const PlatformApp* app, KeySym symbol)
   return app->key_down[keycode] != 0U;
 }
 
-static void platform_sync_overlay_state(PlatformApp* app)
+static int platform_get_overlay_width(const PlatformApp* app)
+{
+  if (app == NULL)
+  {
+    return OVERLAY_UI_DEFAULT_WIDTH;
+  }
+
+  return overlay_get_panel_width_for_window(app->width);
+}
+
+static int platform_get_overlay_visible_width(const PlatformApp* app)
+{
+  if (app == NULL)
+  {
+    return OVERLAY_UI_DEFAULT_WIDTH;
+  }
+
+  return overlay_get_visible_width_for_state(platform_get_overlay_width(app), app->overlay.panel_collapsed);
+}
+
+static float platform_clamp_float(float value, float min_value, float max_value)
+{
+  if (value < min_value)
+  {
+    return min_value;
+  }
+  if (value > max_value)
+  {
+    return max_value;
+  }
+  return value;
+}
+
+static int platform_point_in_client(const PlatformApp* app, int x, int y)
+{
+  return app != NULL && x >= 0 && y >= 0 && x < app->width && y < app->height;
+}
+
+static int platform_point_in_overlay(const PlatformApp* app, int x, int y)
+{
+  int btn_left = 0;
+  int btn_top = 0;
+  int btn_right = 0;
+  int btn_bottom = 0;
+
+  if (!platform_point_in_client(app, x, y))
+  {
+    return 0;
+  }
+
+  if (platform_get_overlay_button_rect(app, &btn_left, &btn_top, &btn_right, &btn_bottom) &&
+    x >= btn_left && x <= btn_right &&
+    y >= btn_top && y <= btn_bottom)
+  {
+    return 1;
+  }
+
+  return app != NULL && app->overlay.panel_collapsed == 0 && x < platform_get_overlay_width(app);
+}
+
+static int platform_point_in_overlay_scroll_view(const PlatformApp* app, int x, int y)
+{
+  return app != NULL &&
+    app->overlay.panel_collapsed == 0 &&
+    platform_point_in_overlay(app, x, y) &&
+    y >= overlay_get_scroll_view_top() &&
+    y < app->height - OVERLAY_UI_MARGIN;
+}
+
+static int platform_get_overlay_button_rect(const PlatformApp* app, int* out_left, int* out_top, int* out_right, int* out_bottom)
+{
+  if (app == NULL)
+  {
+    return 0;
+  }
+
+  (void)overlay_get_panel_toggle_button_rect(
+    platform_get_overlay_width(app),
+    app->overlay.panel_collapsed,
+    out_left,
+    out_top,
+    out_right,
+    out_bottom);
+  return 1;
+}
+
+static int platform_get_overlay_slider_rect(const PlatformApp* app, OverlaySliderId slider_id, int* out_left, int* out_top, int* out_right, int* out_bottom)
+{
+  const int panel_width = platform_get_overlay_width(app);
+  const int left = OVERLAY_UI_MARGIN;
+  const int right = panel_width - OVERLAY_UI_MARGIN;
+  int y = 0;
+  int index = 0;
+
+  if (app == NULL)
+  {
+    return 0;
+  }
+
+  y = overlay_get_scroll_view_top() - (int)app->overlay.scroll_offset;
+
+  for (index = 0; index < OVERLAY_SLIDER_COUNT; ++index)
+  {
+    int item_top = 0;
+    int item_bottom = 0;
+
+    if (overlay_has_gameplay_toggle_before_slider((OverlaySliderId)index))
+    {
+      y += overlay_get_gameplay_toggle_block_height();
+    }
+    if (overlay_has_cloud_toggle_before_slider((OverlaySliderId)index))
+    {
+      y += overlay_get_cloud_toggle_block_height();
+    }
+    if (overlay_has_gpu_selector_before_slider((OverlaySliderId)index))
+    {
+      y += overlay_get_gpu_selector_block_height();
+    }
+    if (overlay_has_metric_card_before_slider((OverlaySliderId)index))
+    {
+      y += OVERLAY_UI_METRIC_HEIGHT + OVERLAY_UI_SECTION_SPACING;
+    }
+
+    y += OVERLAY_UI_LABEL_HEIGHT + OVERLAY_UI_ITEM_SPACING;
+    item_top = y;
+    item_bottom = y + OVERLAY_UI_SLIDER_HEIGHT;
+    if (index == (int)slider_id)
+    {
+      if (out_left != NULL) { *out_left = left; }
+      if (out_top != NULL) { *out_top = item_top; }
+      if (out_right != NULL) { *out_right = right; }
+      if (out_bottom != NULL) { *out_bottom = item_bottom; }
+      return 1;
+    }
+    y += OVERLAY_UI_SLIDER_HEIGHT + OVERLAY_UI_SECTION_SPACING;
+  }
+
+  return 0;
+}
+
+static int platform_get_overlay_toggle_rect(const PlatformApp* app, OverlayToggleId toggle_id, int* out_left, int* out_top, int* out_right, int* out_bottom)
+{
+  const int panel_width = platform_get_overlay_width(app);
+  int y = 0;
+  int index = 0;
+
+  if (app == NULL)
+  {
+    return 0;
+  }
+
+  y = overlay_get_scroll_view_top() - (int)app->overlay.scroll_offset;
+
+  for (index = 0; index < OVERLAY_SLIDER_COUNT; ++index)
+  {
+    if (overlay_has_gameplay_toggle_before_slider((OverlaySliderId)index))
+    {
+      int t = 0;
+      int b = 0;
+
+      t = y + OVERLAY_UI_LABEL_HEIGHT + OVERLAY_UI_ITEM_SPACING;
+      b = t + OVERLAY_UI_CHECKBOX_HEIGHT;
+      if (toggle_id == OVERLAY_TOGGLE_GOD_MODE)
+      {
+        if (out_left != NULL) { *out_left = OVERLAY_UI_MARGIN; }
+        if (out_top != NULL) { *out_top = t; }
+        if (out_right != NULL) { *out_right = panel_width - OVERLAY_UI_MARGIN; }
+        if (out_bottom != NULL) { *out_bottom = b; }
+        return 1;
+      }
+      y = b + OVERLAY_UI_SECTION_SPACING;
+
+      t = y + OVERLAY_UI_LABEL_HEIGHT + OVERLAY_UI_ITEM_SPACING;
+      b = t + OVERLAY_UI_CHECKBOX_HEIGHT;
+      if (toggle_id == OVERLAY_TOGGLE_FREEZE_TIME)
+      {
+        if (out_left != NULL) { *out_left = OVERLAY_UI_MARGIN; }
+        if (out_top != NULL) { *out_top = t; }
+        if (out_right != NULL) { *out_right = panel_width - OVERLAY_UI_MARGIN; }
+        if (out_bottom != NULL) { *out_bottom = b; }
+        return 1;
+      }
+      y = b + OVERLAY_UI_SECTION_SPACING;
+    }
+
+    if (overlay_has_cloud_toggle_before_slider((OverlaySliderId)index))
+    {
+      const int t = y + OVERLAY_UI_LABEL_HEIGHT + OVERLAY_UI_ITEM_SPACING;
+      const int b = t + OVERLAY_UI_CHECKBOX_HEIGHT;
+      if (toggle_id == OVERLAY_TOGGLE_CLOUDS)
+      {
+        if (out_left != NULL) { *out_left = OVERLAY_UI_MARGIN; }
+        if (out_top != NULL) { *out_top = t; }
+        if (out_right != NULL) { *out_right = panel_width - OVERLAY_UI_MARGIN; }
+        if (out_bottom != NULL) { *out_bottom = b; }
+        return 1;
+      }
+      y = b + OVERLAY_UI_SECTION_SPACING;
+    }
+
+    if (overlay_has_gpu_selector_before_slider((OverlaySliderId)index))
+    {
+      y += overlay_get_gpu_selector_block_height();
+    }
+    if (overlay_has_metric_card_before_slider((OverlaySliderId)index))
+    {
+      y += OVERLAY_UI_METRIC_HEIGHT + OVERLAY_UI_SECTION_SPACING;
+    }
+
+    y += OVERLAY_UI_LABEL_HEIGHT + OVERLAY_UI_ITEM_SPACING + OVERLAY_UI_SLIDER_HEIGHT + OVERLAY_UI_SECTION_SPACING;
+  }
+
+  return 0;
+}
+
+static int platform_get_overlay_gpu_preference_rect(const PlatformApp* app, GpuPreferenceMode mode, int* out_left, int* out_top, int* out_right, int* out_bottom)
+{
+  if (app == NULL)
+  {
+    return 0;
+  }
+
+  return overlay_get_gpu_preference_button_rect(
+    platform_get_overlay_width(app),
+    app->overlay.scroll_offset,
+    mode,
+    out_left,
+    out_top,
+    out_right,
+    out_bottom);
+}
+
+static OverlayToggleId platform_get_hovered_toggle(const PlatformApp* app, int x, int y)
+{
+  int l = 0;
+  int t = 0;
+  int r = 0;
+  int b = 0;
+
+  if (platform_get_overlay_toggle_rect(app, OVERLAY_TOGGLE_GOD_MODE, &l, &t, &r, &b) &&
+    x >= l && x <= r && y >= t && y <= b)
+  {
+    return OVERLAY_TOGGLE_GOD_MODE;
+  }
+  if (platform_get_overlay_toggle_rect(app, OVERLAY_TOGGLE_FREEZE_TIME, &l, &t, &r, &b) &&
+    x >= l && x <= r && y >= t && y <= b)
+  {
+    return OVERLAY_TOGGLE_FREEZE_TIME;
+  }
+  if (platform_get_overlay_toggle_rect(app, OVERLAY_TOGGLE_CLOUDS, &l, &t, &r, &b) &&
+    x >= l && x <= r && y >= t && y <= b)
+  {
+    return OVERLAY_TOGGLE_CLOUDS;
+  }
+
+  return OVERLAY_TOGGLE_NONE;
+}
+
+static OverlaySliderId platform_get_hovered_slider(const PlatformApp* app, int x, int y)
+{
+  OverlaySliderId slider_id = OVERLAY_SLIDER_SUN_DISTANCE;
+
+  for (slider_id = OVERLAY_SLIDER_SUN_DISTANCE; slider_id < OVERLAY_SLIDER_COUNT; ++slider_id)
+  {
+    int l = 0;
+    int t = 0;
+    int r = 0;
+    int b = 0;
+    if (platform_get_overlay_slider_rect(app, slider_id, &l, &t, &r, &b) &&
+      x >= l && x <= r && y >= t && y <= b)
+    {
+      return slider_id;
+    }
+  }
+
+  return OVERLAY_SLIDER_NONE;
+}
+
+static GpuPreferenceMode platform_get_hovered_gpu_preference(const PlatformApp* app, int x, int y)
+{
+  GpuPreferenceMode mode = GPU_PREFERENCE_MODE_AUTO;
+
+  for (mode = GPU_PREFERENCE_MODE_AUTO; mode < GPU_PREFERENCE_MODE_COUNT; ++mode)
+  {
+    int l = 0;
+    int t = 0;
+    int r = 0;
+    int b = 0;
+    if (platform_get_overlay_gpu_preference_rect(app, mode, &l, &t, &r, &b) &&
+      x >= l && x <= r && y >= t && y <= b)
+    {
+      return mode;
+    }
+  }
+
+  return (GpuPreferenceMode)-1;
+}
+
+static void platform_toggle_value(PlatformApp* app, OverlayToggleId toggle_id)
 {
   if (app == NULL)
   {
     return;
   }
 
+  switch (toggle_id)
+  {
+    case OVERLAY_TOGGLE_GOD_MODE:
+      app->overlay.god_mode_enabled = (app->overlay.god_mode_enabled == 0);
+      break;
+    case OVERLAY_TOGGLE_FREEZE_TIME:
+      app->overlay.freeze_time_enabled = (app->overlay.freeze_time_enabled == 0);
+      break;
+    case OVERLAY_TOGGLE_CLOUDS:
+      app->overlay.settings.clouds_enabled = (app->overlay.settings.clouds_enabled == 0);
+      break;
+    case OVERLAY_TOGGLE_NONE:
+    case OVERLAY_TOGGLE_COUNT:
+    default:
+      break;
+  }
+}
+
+static void platform_set_slider_value(SceneSettings* settings, OverlaySliderId slider_id, float value)
+{
+  switch (slider_id)
+  {
+    case OVERLAY_SLIDER_SUN_DISTANCE:
+      settings->sun_distance_mkm = value;
+      break;
+    case OVERLAY_SLIDER_SUN_ORBIT:
+      settings->sun_orbit_degrees = value;
+      break;
+    case OVERLAY_SLIDER_CYCLE_DURATION:
+      settings->cycle_duration_seconds = value;
+      break;
+    case OVERLAY_SLIDER_DAYLIGHT_FRACTION:
+      settings->daylight_fraction = value;
+      break;
+    case OVERLAY_SLIDER_CAMERA_FOV:
+      settings->camera_fov_degrees = value;
+      break;
+    case OVERLAY_SLIDER_FOG_DENSITY:
+      settings->fog_density = value;
+      break;
+    case OVERLAY_SLIDER_CLOUD_AMOUNT:
+      settings->cloud_amount = value;
+      break;
+    case OVERLAY_SLIDER_CLOUD_SPACING:
+      settings->cloud_spacing = value;
+      break;
+    case OVERLAY_SLIDER_TERRAIN_BASE:
+      settings->terrain_base_height = value;
+      break;
+    case OVERLAY_SLIDER_TERRAIN_HEIGHT:
+      settings->terrain_height_scale = value;
+      break;
+    case OVERLAY_SLIDER_TERRAIN_ROUGHNESS:
+      settings->terrain_roughness = value;
+      break;
+    case OVERLAY_SLIDER_TERRAIN_RIDGE:
+      settings->terrain_ridge_strength = value;
+      break;
+    case OVERLAY_SLIDER_PALM_SIZE:
+      settings->palm_size = value;
+      break;
+    case OVERLAY_SLIDER_PALM_COUNT:
+      settings->palm_count = value;
+      break;
+    case OVERLAY_SLIDER_PALM_FRUIT_DENSITY:
+      settings->palm_fruit_density = value;
+      break;
+    case OVERLAY_SLIDER_PALM_RENDER_RADIUS:
+      settings->palm_render_radius = value;
+      break;
+    case OVERLAY_SLIDER_NONE:
+    case OVERLAY_SLIDER_COUNT:
+    default:
+      break;
+  }
+}
+
+static void platform_adjust_overlay_scroll(PlatformApp* app, float delta)
+{
+  if (app == NULL)
+  {
+    return;
+  }
+
+  app->overlay.scroll_max = overlay_get_scroll_max_for_window(app->height);
+  app->overlay.scroll_offset += delta;
+  if (app->overlay.scroll_offset < 0.0f)
+  {
+    app->overlay.scroll_offset = 0.0f;
+  }
+  if (app->overlay.scroll_offset > app->overlay.scroll_max)
+  {
+    app->overlay.scroll_offset = app->overlay.scroll_max;
+  }
+}
+
+static void platform_update_overlay_interaction(PlatformApp* app, int has_focus)
+{
+  int left_button_down = 0;
+  int btn_left = 0;
+  int btn_top = 0;
+  int btn_right = 0;
+  int btn_bottom = 0;
+  int button_hovered = 0;
+
+  if (app == NULL)
+  {
+    return;
+  }
+
+  app->overlay.panel_width = platform_get_overlay_width(app);
   app->overlay.cursor_mode_enabled = app->cursor_mode_enabled;
   app->overlay.hot_slider = OVERLAY_SLIDER_NONE;
-  app->overlay.active_slider = OVERLAY_SLIDER_NONE;
   app->overlay.hot_toggle = OVERLAY_TOGGLE_NONE;
   app->overlay.hot_gpu_preference = -1;
-  app->overlay.panel_width = 0;
-  app->overlay.panel_collapsed = 1;
-  app->overlay.mouse_x = 0;
-  app->overlay.mouse_y = 0;
-  app->overlay.scroll_offset = 0.0f;
-  app->overlay.scroll_max = 0.0f;
+  app->overlay.scroll_max = overlay_get_scroll_max_for_window(app->height);
+  if (app->overlay.scroll_offset > app->overlay.scroll_max)
+  {
+    app->overlay.scroll_offset = app->overlay.scroll_max;
+  }
+
+  if (app->cursor_mode_enabled == 0 || !has_focus)
+  {
+    app->overlay.active_slider = OVERLAY_SLIDER_NONE;
+    app->previous_left_button_down = 0;
+    return;
+  }
+
+  left_button_down = app->left_button_down;
+
+  if (platform_get_overlay_button_rect(app, &btn_left, &btn_top, &btn_right, &btn_bottom) &&
+    app->overlay.mouse_x >= btn_left && app->overlay.mouse_x <= btn_right &&
+    app->overlay.mouse_y >= btn_top && app->overlay.mouse_y <= btn_bottom)
+  {
+    button_hovered = 1;
+  }
+
+  if (platform_point_in_overlay_scroll_view(app, app->overlay.mouse_x, app->overlay.mouse_y))
+  {
+    app->overlay.hot_toggle = (int)platform_get_hovered_toggle(app, app->overlay.mouse_x, app->overlay.mouse_y);
+    app->overlay.hot_slider = (int)platform_get_hovered_slider(app, app->overlay.mouse_x, app->overlay.mouse_y);
+    app->overlay.hot_gpu_preference = (int)platform_get_hovered_gpu_preference(app, app->overlay.mouse_x, app->overlay.mouse_y);
+  }
+
+  if (left_button_down && !app->previous_left_button_down)
+  {
+    if (button_hovered)
+    {
+      app->overlay.panel_collapsed = (app->overlay.panel_collapsed == 0);
+      app->overlay.active_slider = OVERLAY_SLIDER_NONE;
+    }
+    else if (app->overlay.hot_toggle != OVERLAY_TOGGLE_NONE)
+    {
+      platform_toggle_value(app, (OverlayToggleId)app->overlay.hot_toggle);
+      app->overlay.active_slider = OVERLAY_SLIDER_NONE;
+    }
+    else if (app->overlay.hot_gpu_preference >= (int)GPU_PREFERENCE_MODE_AUTO &&
+      app->overlay.hot_gpu_preference < (int)GPU_PREFERENCE_MODE_COUNT)
+    {
+      app->gpu_switch_requested = 1;
+      app->requested_gpu_preference = (GpuPreferenceMode)app->overlay.hot_gpu_preference;
+      app->overlay.active_slider = OVERLAY_SLIDER_NONE;
+    }
+    else if (app->overlay.hot_slider != OVERLAY_SLIDER_NONE)
+    {
+      app->overlay.active_slider = app->overlay.hot_slider;
+      if (app->overlay.active_slider == OVERLAY_SLIDER_SUN_ORBIT)
+      {
+        app->overlay.freeze_time_enabled = 1;
+      }
+    }
+    else if (platform_point_in_client(app, app->overlay.mouse_x, app->overlay.mouse_y) &&
+      !platform_point_in_overlay(app, app->overlay.mouse_x, app->overlay.mouse_y))
+    {
+      app->overlay.active_slider = OVERLAY_SLIDER_NONE;
+      app->cursor_mode_enabled = 0;
+      app->overlay.cursor_mode_enabled = 0;
+      app->suppress_world_click_until_release = 1;
+      platform_set_mouse_capture(app, 1);
+      left_button_down = 0;
+    }
+  }
+
+  if (!left_button_down)
+  {
+    app->overlay.active_slider = OVERLAY_SLIDER_NONE;
+  }
+  else if (app->overlay.active_slider != OVERLAY_SLIDER_NONE)
+  {
+    int sl = 0;
+    int st = 0;
+    int sr = 0;
+    int sb = 0;
+    float min_value = 0.0f;
+    float max_value = 1.0f;
+    if (platform_get_overlay_slider_rect(app, (OverlaySliderId)app->overlay.active_slider, &sl, &st, &sr, &sb))
+    {
+      const float span = (float)((sr - sl > 1) ? (sr - sl) : 1);
+      const float normalized = platform_clamp_float((float)(app->overlay.mouse_x - sl) / span, 0.0f, 1.0f);
+      overlay_get_slider_range((OverlaySliderId)app->overlay.active_slider, &min_value, &max_value);
+      platform_set_slider_value(&app->overlay.settings, (OverlaySliderId)app->overlay.active_slider, min_value + (max_value - min_value) * normalized);
+      if (app->overlay.active_slider == OVERLAY_SLIDER_SUN_ORBIT)
+      {
+        app->overlay.freeze_time_enabled = 1;
+      }
+    }
+  }
+
+  app->previous_left_button_down = left_button_down;
 }
 
 static void platform_center_cursor(PlatformApp* app)
@@ -368,7 +880,14 @@ int platform_create(PlatformApp* app, const char* title, int width, int height)
   app->overlay.freeze_time_enabled = 0;
   app->overlay.render_quality_preset = RENDER_QUALITY_PRESET_HIGH;
   app->requested_render_quality_preset = RENDER_QUALITY_PRESET_HIGH;
-  platform_sync_overlay_state(app);
+  app->overlay.hot_slider = OVERLAY_SLIDER_NONE;
+  app->overlay.active_slider = OVERLAY_SLIDER_NONE;
+  app->overlay.hot_toggle = OVERLAY_TOGGLE_NONE;
+  app->overlay.hot_gpu_preference = -1;
+  app->overlay.panel_collapsed = 0;
+  app->overlay.panel_width = overlay_get_panel_width_for_window(app->width);
+  app->overlay.scroll_offset = 0.0f;
+  app->overlay.scroll_max = overlay_get_scroll_max_for_window(app->height);
   platform_refresh_gpu_info(app);
 
   diagnostics_logf(
@@ -522,10 +1041,31 @@ void platform_pump_messages(PlatformApp* app, PlatformInput* input)
         if (event.xbutton.button == Button1)
         {
           app->left_button_down = 1;
+          if (app->cursor_mode_enabled != 0)
+          {
+            app->overlay.mouse_x = event.xbutton.x;
+            app->overlay.mouse_y = event.xbutton.y;
+          }
         }
         else if (event.xbutton.button == Button3)
         {
           app->right_button_down = 1;
+        }
+        else if (event.xbutton.button == Button4)
+        {
+          if (app->cursor_mode_enabled != 0 &&
+            platform_point_in_overlay(app, event.xbutton.x, event.xbutton.y))
+          {
+            platform_adjust_overlay_scroll(app, -28.0f);
+          }
+        }
+        else if (event.xbutton.button == Button5)
+        {
+          if (app->cursor_mode_enabled != 0 &&
+            platform_point_in_overlay(app, event.xbutton.x, event.xbutton.y))
+          {
+            platform_adjust_overlay_scroll(app, 28.0f);
+          }
         }
         break;
 
@@ -541,7 +1081,12 @@ void platform_pump_messages(PlatformApp* app, PlatformInput* input)
         break;
 
       case MotionNotify:
-        if (app->mouse_captured != 0 && app->cursor_mode_enabled == 0)
+        if (app->cursor_mode_enabled != 0)
+        {
+          app->overlay.mouse_x = event.xmotion.x;
+          app->overlay.mouse_y = event.xmotion.y;
+        }
+        else if (app->mouse_captured != 0)
         {
           const int center_x = app->width / 2;
           const int center_y = app->height / 2;
@@ -582,8 +1127,6 @@ void platform_pump_messages(PlatformApp* app, PlatformInput* input)
     (platform_is_key_down(app, XK_Shift_L) || platform_is_key_down(app, XK_Shift_R)) : 0;
   fast_modifier_down = (has_focus && app->cursor_mode_enabled == 0) ?
     (platform_is_key_down(app, XK_Control_L) || platform_is_key_down(app, XK_Control_R)) : 0;
-  platform_sync_overlay_state(app);
-
   if (has_focus && alt_down && !app->previous_alt_down)
   {
     app->cursor_mode_enabled = (app->cursor_mode_enabled == 0);
@@ -595,7 +1138,6 @@ void platform_pump_messages(PlatformApp* app, PlatformInput* input)
     {
       platform_set_mouse_capture(app, 1);
     }
-    platform_sync_overlay_state(app);
   }
 
   if (!has_focus)
@@ -636,10 +1178,20 @@ void platform_pump_messages(PlatformApp* app, PlatformInput* input)
   input->jump_pressed = jump_down && !app->previous_jump_down;
   input->jump_held = jump_down;
   input->move_down_held = (app->overlay.god_mode_enabled != 0) ? move_down_down : 0;
-  input->remove_block_pressed = (has_focus && app->cursor_mode_enabled == 0) ?
+  if (app->suppress_world_click_until_release != 0)
+  {
+    if (!app->left_button_down && !app->right_button_down)
+    {
+      app->suppress_world_click_until_release = 0;
+    }
+  }
+
+  input->remove_block_pressed = (has_focus && app->cursor_mode_enabled == 0 && app->suppress_world_click_until_release == 0) ?
     (app->left_button_down && !app->previous_world_left_button_down) : 0;
-  input->place_block_pressed = (has_focus && app->cursor_mode_enabled == 0) ?
+  input->place_block_pressed = (has_focus && app->cursor_mode_enabled == 0 && app->suppress_world_click_until_release == 0) ?
     (app->right_button_down && !app->previous_world_right_button_down) : 0;
+
+  platform_update_overlay_interaction(app, has_focus);
 
   if (has_focus && app->cursor_mode_enabled == 0)
   {

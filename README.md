@@ -20,42 +20,46 @@ Catatan: `stb_image.h` sudah ada di repository; tidak perlu instalasi terpisah. 
 
 ---
 
-**Build — contoh langkah (Windows)**
+**Build**
 
-Disarankan pakai `cmake` presets jika tersedia (repo menyertakan `CMakePresets.json`). Contoh menggunakan preset:
+Repo menyertakan `CMakePresets.json`. Gunakan preset sesuai platform dan konfigurasi:
+
+Windows (MSVC):
 
 ```bash
 cmake --preset windows-msvc-debug
 cmake --build --preset windows-msvc-debug
 ```
 
-Jika tidak pakai preset, contoh MSVC (Visual Studio):
-
-```powershell
-cmake -S . -B build/windows-msvc-debug -G "Visual Studio 17 2022" -A x64
-cmake --build build/windows-msvc-debug --config Debug
-```
-
-Contoh MinGW/GCC (Makefiles):
+Windows (GCC):
 
 ```bash
-cmake -S . -B build/windows-gcc-debug -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Debug
-cmake --build build/windows-gcc-debug
+cmake --preset windows-gcc-debug
+cmake --build --preset windows-gcc-debug
 ```
 
-Contoh Ninja/Clang:
+Windows (Clang):
 
 ```bash
-cmake -S . -B build/windows-clang-debug -G Ninja -DCMAKE_BUILD_TYPE=Debug
-cmake --build build/windows-clang-debug
+cmake --preset windows-clang-debug
+cmake --build --preset windows-clang-debug
 ```
 
-macOS (Xcode):
+Linux (WSL / native):
 
 ```bash
-cmake -S . -B build/macos-debug -G "Xcode"
-cmake --build build/macos-debug --config Debug
+cmake --preset linux-debug
+cmake --build --preset linux-debug
 ```
+
+macOS:
+
+```bash
+cmake --preset macos-debug
+cmake --build --preset macos-debug
+```
+
+> Ganti `debug` dengan `release` pada nama preset untuk build Release.
 
 ---
 

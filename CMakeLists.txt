@@ -160,9 +160,11 @@ function(opengl_sky_detect_vcpkg_triplet out_var)
   endif()
 endfunction()
 
+# vcpkg is only used on Windows; skip auto-detection on Linux / macOS / Emscripten.
 if((NOT DEFINED CMAKE_TOOLCHAIN_FILE OR "${CMAKE_TOOLCHAIN_FILE}" STREQUAL "") AND
   OPENGL_SKY_AUTO_DETECT_VCPKG AND
-  NOT EMSCRIPTEN)
+  NOT EMSCRIPTEN AND
+  CMAKE_HOST_SYSTEM_NAME STREQUAL "Windows")
   opengl_sky_resolve_vcpkg_root(OPENGL_SKY_RESOLVED_VCPKG_ROOT)
   if(NOT "${OPENGL_SKY_RESOLVED_VCPKG_ROOT}" STREQUAL "")
     set(OPENGL_SKY_VCPKG_ROOT "${OPENGL_SKY_RESOLVED_VCPKG_ROOT}" CACHE PATH "Path to the vcpkg root directory. Leave empty to let CMake auto-detect it." FORCE)
@@ -444,6 +446,7 @@ else()
     target_compile_definitions(opengl_sky PRIVATE GL_SILENCE_DEPRECATION)
   elseif("${OPENGL_SKY_PLATFORM_OS}" STREQUAL "Linux")
     target_compile_definitions(opengl_sky PRIVATE _POSIX_C_SOURCE=200809L)
+    target_link_libraries(opengl_sky PRIVATE m)
     if(TARGET X11::X11)
       target_link_libraries(opengl_sky PRIVATE X11::X11)
     else()
